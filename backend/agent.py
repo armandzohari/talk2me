@@ -40,6 +40,9 @@ async def run_agent(room_name: str):
             audio_in_enabled=True,
             audio_out_enabled=True,
             vad_enabled=True,
+            vad_audio_passthrough=True,   # REQUIRED: audio must flow to Deepgram even when VAD
+                                          # says "not speaking" — without this, AudioRawFrame
+                                          # is consumed by the VAD and never reaches DeepgramSTTService
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
                     stop_secs=0.5,
