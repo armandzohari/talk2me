@@ -82,7 +82,10 @@ async def run_agent(room_name: str):
     )
 
     # Conversation context — system prompt + greeting trigger
-    messages = [{"role": "user", "content": "Please greet the visitor warmly and briefly."}]
+    messages = [
+        {"role": "system", "content": config.SYSTEM_PROMPT},
+        {"role": "user",   "content": "Please greet the visitor warmly and briefly. Introduce yourself as Armand."},
+    ]
     context = OpenAILLMContext(messages=messages)
     context_aggregator = llm.create_context_aggregator(context)
 
