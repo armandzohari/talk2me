@@ -51,13 +51,19 @@ async def run_agent(room_name: str):
     )
 
     # ── STT: Deepgram (streaming) ───────────────────────────────────────────
+    # NOTE: sample_rate MUST be a top-level param here.
+    # Pipecat's DeepgramSTTService.start() does:
+    #   self._settings["sample_rate"] = self.sample_rate
+    # …which OVERWRITES whatever is inside live_options.
+    # If sample_rate is only in live_options, self.sample_rate is None → Deepgram
+    # receives audio but never transcribes it.
     stt = DeepgramSTTService(
         api_key=config.DEEPGRAM_API_KEY,
+        sample_rate=16000,          # top-level — this is what pipecat actually uses
         live_options=LiveOptions(
             model="nova-2-general",
             language="en-US",
             encoding="linear16",
-            sample_rate=16000,
             channels=1,
             smart_format=True,
             interim_results=True,
