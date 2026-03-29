@@ -1,5 +1,5 @@
 playing with claude
-Based on the files you provided, here is the architecture and tech stack for the **Talk2Me** voice agent.
+here is the architecture and tech stack for the **Talk2Me** voice agent.
 
 ### **Architecture Schema**
 
@@ -49,6 +49,7 @@ graph TD
 ```
 
 ---
+Vercel handles the FastAPI deployment, environment variables, and the /join handshake.
 
 ### **Tech Stack Breakdown**
 
