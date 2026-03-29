@@ -59,7 +59,7 @@ async def run_agent(room_name: str):
             model="nova-3",
             language="en-US",
             smart_format=True,
-            interim_results=False, # ADDED: Only send full, final sentences to Claude
+            interim_results=True,  # Required: pipecat needs interim results for pipeline flow
             punctuate=True,
             endpointing=300 # ADDED: tells Deepgram exactly when to stop listening and send the text to Claude
         ),
@@ -68,7 +68,7 @@ async def run_agent(room_name: str):
     # ── LLM: Claude ────────────────────────────────────────────────────────
     llm = AnthropicLLMService(
         api_key=config.ANTHROPIC_API_KEY,
-        model = "claude-3-5-sonnet-20240620", # WAS: model="claude-sonnet-4-6",
+        model="claude-sonnet-4-6",
     )
 
     # Conversation context — system prompt lives here
