@@ -61,6 +61,7 @@ async def run_agent(room_name: str):
             smart_format=True,
             interim_results=False, # ADDED: Only send full, final sentences to Claude
             punctuate=True,
+            endpointing=300 # ADDED: tells Deepgram exactly when to stop listening and send the text to Claude
         ),
     )
 
