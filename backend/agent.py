@@ -68,7 +68,7 @@ async def run_agent(room_name: str):
     # ── LLM: Claude ────────────────────────────────────────────────────────
     llm = AnthropicLLMService(
         api_key=config.ANTHROPIC_API_KEY,
-        model="claude-sonnet-4-6",
+        model = "claude-3-5-sonnet-20240620", # WAS: model="claude-sonnet-4-6",
     )
 
     # Conversation context — system prompt lives here
