@@ -1,3 +1,5 @@
+domain armandsays.com
+
 playing with claude
 here is the architecture and tech stack for the **Talk2Me** voice agent.
 
