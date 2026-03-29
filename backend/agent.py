@@ -59,6 +59,7 @@ async def run_agent(room_name: str):
             model="nova-3",
             language="en-US",
             smart_format=True,
+            interim_results=False, # ADDED: Only send full, final sentences to Claude
             punctuate=True,
         ),
     )
