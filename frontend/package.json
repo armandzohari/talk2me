@@ -8,7 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@livekit/components-react": "^1.5.0",
+    "@livekit/components-react": "^2.6.0",
     "livekit-client": "^2.5.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
