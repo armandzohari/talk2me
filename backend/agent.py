@@ -40,13 +40,14 @@ async def run_agent(room_name: str):
         params=LiveKitParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_in_sample_rate=16000,
+            audio_out_sample_rate=16000,
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                stop_secs=0.5,
-                start_secs=0.2,      # Added: Reduces delay before speech is captured
-                min_volume=0.2,      # CRITICAL: Lowered from 0.6 so it hears you
-                confidence=0.5,      # Lowered: Makes VAD more sensitive to speech
+                    stop_secs=0.5,
+                    min_volume=0.2,
+                    confidence=0.5,
                 )
             ),
         ),
@@ -56,12 +57,15 @@ async def run_agent(room_name: str):
     stt = DeepgramSTTService(
         api_key=config.DEEPGRAM_API_KEY,
         live_options=LiveOptions(
-            model="nova-3",
+            model="nova-2-general",
             language="en-US",
+            encoding="linear16",
+            sample_rate=16000,
+            channels=1,
             smart_format=True,
-            interim_results=True,  # Required: pipecat needs interim results for pipeline flow
+            interim_results=True,
             punctuate=True,
-            endpointing=300 # ADDED: tells Deepgram exactly when to stop listening and send the text to Claude
+            endpointing=300,
         ),
     )
 
