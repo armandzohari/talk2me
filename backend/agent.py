@@ -4,7 +4,7 @@ Pipecat voice pipeline for Talk2Me.
 Flow:
   LiveKit mic audio
     → Silero VAD          (detects speech start/end)
-    → Deepgram STT        (streaming transcription, Nova-3)
+    → Deepgram STT        (streaming transcription)
     → Claude LLM          (conversational brain)
     → Cartesia TTS        (your cloned voice)
     → LiveKit speaker audio
@@ -25,8 +25,7 @@ from pipecat.services.anthropic import AnthropicLLMService
 from pipecat.services.cartesia import CartesiaTTSService
 
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-
-from pipecat.frames.frames import EndFrame
+from pipecat.frames.frames import LLMMessagesFrame, EndFrame
 
 import config
 
@@ -40,8 +39,6 @@ async def run_agent(room_name: str):
         params=LiveKitParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_in_sample_rate=16000,
-            audio_out_sample_rate=16000,
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
@@ -53,7 +50,7 @@ async def run_agent(room_name: str):
         ),
     )
 
-    # ── STT: Deepgram Nova-3 (streaming) ───────────────────────────────────
+    # ── STT: Deepgram (streaming) ───────────────────────────────────────────
     stt = DeepgramSTTService(
         api_key=config.DEEPGRAM_API_KEY,
         live_options=LiveOptions(
@@ -75,10 +72,9 @@ async def run_agent(room_name: str):
         model="claude-sonnet-4-6",
     )
 
-    # Conversation context — system prompt lives here
-    context = OpenAILLMContext(
-        messages=[{"role": "user", "content": "Hello"}, {"role": "assistant", "content": config.SYSTEM_PROMPT}]
-    )
+    # Conversation context — system prompt + greeting trigger
+    messages = [{"role": "user", "content": "Please greet the visitor warmly and briefly."}]
+    context = OpenAILLMContext(messages=messages)
     context_aggregator = llm.create_context_aggregator(context)
 
     # ── TTS: Cartesia (your cloned voice) ───────────────────────────────────
@@ -91,22 +87,27 @@ async def run_agent(room_name: str):
     # ── Assemble the pipeline ──────────────────────────────────────────────
     pipeline = Pipeline(
         [
-            transport.input(),               # Raw audio in from LiveKit
-            stt,                             # Audio → transcript
-            context_aggregator.user(),       # Transcript → context message
-            llm,                             # Context → LLM response stream
-            tts,                             # LLM text → speech audio
-            transport.output(),              # Audio out to LiveKit
-            context_aggregator.assistant(),  # Store assistant turn in context
+            transport.input(),
+            stt,
+            context_aggregator.user(),
+            llm,
+            tts,
+            transport.output(),
+            context_aggregator.assistant(),
         ]
     )
 
     task = PipelineTask(
         pipeline,
-        params=PipelineParams(allow_interruptions=True),  # Enables barge-in
+        params=PipelineParams(allow_interruptions=True),
     )
 
-    # When the last participant leaves, end the pipeline
+    # Greet the user as soon as they join — tests the full output chain
+    @transport.event_handler("on_first_participant_joined")
+    async def on_first_participant_joined(transport, participant):
+        await task.queue_frames([LLMMessagesFrame(messages)])
+
+    # End pipeline when visitor leaves
     @transport.event_handler("on_participant_disconnected")
     async def on_disconnect(transport, participant):
         await task.queue_frame(EndFrame())
@@ -116,9 +117,7 @@ async def run_agent(room_name: str):
 
 
 def _mint_agent_token(room_name: str) -> str:
-    """Mint a LiveKit token for the AI agent participant."""
     from livekit.api import AccessToken, VideoGrants
-
     return (
         AccessToken(config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET)
         .with_identity("talk2me-agent")
