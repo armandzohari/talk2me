@@ -9,9 +9,9 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # Deepgram
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
-# ElevenLabs
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")  # Your cloned voice ID
+# Cartesia
+CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
+CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID")  # Your cloned voice ID
 
 # LiveKit
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")

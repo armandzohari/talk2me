@@ -6,7 +6,7 @@ Flow:
     → Silero VAD          (detects speech start/end)
     → Deepgram STT        (streaming transcription, Nova-3)
     → Claude LLM          (conversational brain)
-    → ElevenLabs TTS      (your cloned voice, Turbo v2.5)
+    → Cartesia TTS        (your cloned voice)
     → LiveKit speaker audio
 """
 
@@ -22,12 +22,9 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 
 from pipecat.services.deepgram import DeepgramSTTService, LiveOptions
 from pipecat.services.anthropic import AnthropicLLMService
-from pipecat.services.elevenlabs import ElevenLabsTTSService
+from pipecat.services.cartesia import CartesiaTTSService
 
-from pipecat.processors.aggregators.openai_llm_context import (
-    OpenAILLMContext,
-    OpenAILLMContextAggregator,
-)
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
 from pipecat.frames.frames import EndFrame
 
@@ -46,7 +43,7 @@ async def run_agent(room_name: str):
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    stop_secs=0.5,       # How long silence before we consider turn over
+                    stop_secs=0.5,
                 )
             ),
         ),
@@ -71,26 +68,26 @@ async def run_agent(room_name: str):
 
     # Conversation context — system prompt lives here
     context = OpenAILLMContext(
-        messages=[{"role": "system", "content": config.SYSTEM_PROMPT}]
+        messages=[{"role": "user", "content": "Hello"}, {"role": "assistant", "content": config.SYSTEM_PROMPT}]
     )
-    context_aggregator = OpenAILLMContextAggregator(context)
+    context_aggregator = llm.create_context_aggregator(context)
 
-    # ── TTS: ElevenLabs Turbo v2.5 (your cloned voice) ─────────────────────
-    tts = ElevenLabsTTSService(
-        api_key=config.ELEVENLABS_API_KEY,
-        voice_id=config.ELEVENLABS_VOICE_ID,
-        model="eleven_turbo_v2_5",   # Lowest latency model
+    # ── TTS: Cartesia (your cloned voice) ───────────────────────────────────
+    tts = CartesiaTTSService(
+        api_key=config.CARTESIA_API_KEY,
+        voice_id=config.CARTESIA_VOICE_ID,
+        model="sonic-2",
     )
 
     # ── Assemble the pipeline ──────────────────────────────────────────────
     pipeline = Pipeline(
         [
-            transport.input(),          # Raw audio in from LiveKit
-            stt,                        # Audio → transcript
-            context_aggregator.user(),  # Transcript → context message
-            llm,                        # Context → LLM response stream
-            tts,                        # LLM text → speech audio
-            transport.output(),         # Audio out to LiveKit
+            transport.input(),               # Raw audio in from LiveKit
+            stt,                             # Audio → transcript
+            context_aggregator.user(),       # Transcript → context message
+            llm,                             # Context → LLM response stream
+            tts,                             # LLM text → speech audio
+            transport.output(),              # Audio out to LiveKit
             context_aggregator.assistant(),  # Store assistant turn in context
         ]
     )
