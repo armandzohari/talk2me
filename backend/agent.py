@@ -43,7 +43,10 @@ async def run_agent(room_name: str):
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    stop_secs=0.5,
+                stop_secs=0.5,
+                start_secs=0.2,      # Added: Reduces delay before speech is captured
+                min_volume=0.2,      # CRITICAL: Lowered from 0.6 so it hears you
+                confidence=0.5,      # Lowered: Makes VAD more sensitive to speech
                 )
             ),
         ),
