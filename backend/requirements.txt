@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 
 # Pipecat - voice pipeline orchestration (livekit/livekit-api pulled in as transitive deps)
 pipecat-ai[silero,deepgram,cartesia,anthropic,livekit]==0.0.57
+openai>=1.0.0
