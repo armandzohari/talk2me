@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   useLocalParticipant,
   useRemoteParticipants,
   useRoomContext,
 } from "@livekit/components-react";
+import { RoomEvent } from "livekit-client";
 
 export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
   const room = useRoomContext();
@@ -11,6 +12,9 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
   const remoteParticipants = useRemoteParticipants();
   const [muted, setMuted] = useState(false);
   const [agentSpeaking, setAgentSpeaking] = useState(false);
+  const [transcript, setTranscript] = useState([]);
+  const [copied, setCopied] = useState(false);
+  const transcriptEndRef = useRef(null);
 
   const agentParticipant = remoteParticipants.find(
     (p) => p.identity === "talk2me-agent"
@@ -22,6 +26,37 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
     agentParticipant.on("isSpeakingChanged", handler);
     return () => agentParticipant.off("isSpeakingChanged", handler);
   }, [agentParticipant]);
+
+  // Listen for transcript data packets from the backend
+  useEffect(() => {
+    if (!room) return;
+    const handler = (payload, participant, kind, topic) => {
+      if (topic !== "transcript") return;
+      try {
+        const msg = JSON.parse(new TextDecoder().decode(payload));
+        if (msg.speaker && msg.text) {
+          setTranscript(prev => [...prev, { ...msg, id: Date.now() + Math.random() }]);
+        }
+      } catch (_) {}
+    };
+    room.on(RoomEvent.DataReceived, handler);
+    return () => room.off(RoomEvent.DataReceived, handler);
+  }, [room]);
+
+  // Auto-scroll transcript to bottom on new messages
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [transcript]);
+
+  const copyTranscript = () => {
+    const text = transcript
+      .map(m => `${m.speaker === "agent" ? agentName : "Visitor"}: ${m.text}`)
+      .join("\n\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   const toggleMute = async () => {
     await localParticipant.setMicrophoneEnabled(muted);
@@ -89,6 +124,51 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
             End
           </button>
         </div>
+
+        {/* ── Transcript panel ───────────────────────────────────────── */}
+        <div className="transcript-wrap">
+          <div className="transcript-header">
+            <span className="transcript-title">Transcript</span>
+            <button
+              className={`copy-btn ${copied ? "copy-btn--done" : ""}`}
+              onClick={copyTranscript}
+              title="Copy transcript"
+              disabled={transcript.length === 0}
+            >
+              {copied ? (
+                /* checkmark */
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                /* copy icon */
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              )}
+            </button>
+          </div>
+
+          <div className="transcript-body">
+            {transcript.length === 0 ? (
+              <p className="transcript-empty">Conversation transcript will appear here…</p>
+            ) : (
+              transcript.map(msg => (
+                <div
+                  key={msg.id}
+                  className={`transcript-msg ${msg.speaker === "agent" ? "transcript-msg--agent" : "transcript-msg--visitor"}`}
+                >
+                  <span className="transcript-speaker">
+                    {msg.speaker === "agent" ? agentName : "You"}
+                  </span>
+                  <span className="transcript-text">{msg.text}</span>
+                </div>
+              ))
+            )}
+            <div ref={transcriptEndRef} />
+          </div>
+        </div>
       </div>
     </>
   );
@@ -103,9 +183,10 @@ const css = `
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 1rem;
-    height: 100vh;
+    min-height: 100vh;
+    padding: 3rem 1rem 3rem;
     background: #000;
     color: #fff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -229,5 +310,120 @@ const css = `
 
   .ctrl-btn--end:hover {
     background: rgba(248,113,113,0.35);
+  }
+
+  /* ── Transcript panel ─────────────────────────────────────── */
+  .transcript-wrap {
+    width: 100%;
+    max-width: 560px;
+    margin-top: 2rem;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(12px);
+    overflow: hidden;
+  }
+
+  .transcript-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .transcript-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.4);
+  }
+
+  .copy-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: transparent;
+    color: rgba(255,255,255,0.45);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .copy-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+  }
+
+  .copy-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  .copy-btn--done {
+    color: #4ade80;
+    border-color: rgba(74,222,128,0.3);
+  }
+
+  .transcript-body {
+    padding: 0.75rem 1rem 1rem;
+    max-height: 280px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+  }
+
+  .transcript-body::-webkit-scrollbar {
+    width: 4px;
+  }
+  .transcript-body::-webkit-scrollbar-track { background: transparent; }
+  .transcript-body::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+  }
+
+  .transcript-empty {
+    color: rgba(255,255,255,0.25);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 1.5rem 0;
+  }
+
+  .transcript-msg {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .transcript-speaker {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .transcript-msg--agent .transcript-speaker {
+    color: rgba(139,92,246,0.9);
+  }
+
+  .transcript-msg--visitor .transcript-speaker {
+    color: rgba(255,255,255,0.45);
+  }
+
+  .transcript-text {
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: rgba(255,255,255,0.85);
+  }
+
+  .transcript-msg--visitor .transcript-text {
+    color: rgba(255,255,255,0.65);
   }
 `;
