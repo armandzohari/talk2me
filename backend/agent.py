@@ -11,7 +11,6 @@ Flow:
 """
 
 import asyncio
-import json
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -26,92 +25,9 @@ from pipecat.services.anthropic import AnthropicLLMService
 from pipecat.services.cartesia import CartesiaTTSService
 
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.frames.frames import LLMMessagesFrame, EndFrame, TranscriptionFrame, TextFrame
-
-# FrameDirection lives in different places across pipecat versions
-try:
-    from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-except ImportError:
-    from pipecat.processors.frame_processor import FrameProcessor
-    FrameDirection = None  # type: ignore
-
-# LLMFullResponseEndFrame was renamed in some pipecat versions
-try:
-    from pipecat.frames.frames import LLMFullResponseEndFrame as _LlmEndFrame
-except ImportError:
-    try:
-        from pipecat.frames.frames import LLMResponseEndFrame as _LlmEndFrame
-    except ImportError:
-        _LlmEndFrame = None  # type: ignore
+from pipecat.frames.frames import LLMMessagesFrame, EndFrame
 
 import config
-
-
-# ── Transcript forwarders ──────────────────────────────────────────────────────
-
-class _TranscriptBase(FrameProcessor):
-    """Shared helper: publishes a JSON dict to the LiveKit data channel."""
-
-    def __init__(self, transport: LiveKitTransport):
-        super().__init__()
-        self._transport = transport
-
-    async def _publish(self, payload: dict):
-        """Best-effort — never let a publish failure break the call."""
-        try:
-            room = getattr(self._transport, '_room', None)
-            if room is None:
-                return
-            lp = getattr(room, 'local_participant', None)
-            if lp is None:
-                return
-            data = json.dumps(payload).encode('utf-8')
-            # livekit-python ≥1.0 uses keyword args; 0.x uses positional + kind enum
-            try:
-                await lp.publish_data(data, reliable=True, topic="transcript")
-            except TypeError:
-                from livekit.rtc import DataPacketKind
-                await lp.publish_data(data, DataPacketKind.RELIABLE, topic="transcript")
-        except Exception:
-            pass
-
-
-class UserTranscriptForwarder(_TranscriptBase):
-    """Between STT and context aggregator — taps final TranscriptionFrames."""
-
-    async def process_frame(self, frame, direction):
-        try:
-            if isinstance(frame, TranscriptionFrame):
-                text = (getattr(frame, 'text', '') or '').strip()
-                is_final = getattr(frame, 'is_final', True)
-                if text and is_final:
-                    await self._publish({"speaker": "visitor", "text": text})
-        except Exception:
-            pass
-        # MUST call super() — this is what wires the frame into Pipecat's internal queue
-        await super().process_frame(frame, direction)
-
-
-class AgentTranscriptForwarder(_TranscriptBase):
-    """Between LLM and TTS — buffers streaming TextFrames and flushes on end."""
-
-    def __init__(self, transport: LiveKitTransport):
-        super().__init__(transport)
-        self._buffer = ""
-
-    async def process_frame(self, frame, direction):
-        try:
-            if isinstance(frame, TextFrame):
-                self._buffer += (getattr(frame, 'text', '') or '')
-            elif _LlmEndFrame and isinstance(frame, _LlmEndFrame):
-                text = self._buffer.strip()
-                if text:
-                    await self._publish({"speaker": "agent", "text": text})
-                self._buffer = ""
-        except Exception:
-            pass
-        # MUST call super() — this is what wires the frame into Pipecat's internal queue
-        await super().process_frame(frame, direction)
 
 
 async def run_agent(room_name: str):
@@ -180,19 +96,13 @@ async def run_agent(room_name: str):
         model="sonic-2",
     )
 
-    # ── Transcript forwarders (send speaker text to frontend data channel) ─
-    user_transcript = UserTranscriptForwarder(transport)
-    agent_transcript = AgentTranscriptForwarder(transport)
-
     # ── Assemble the pipeline ──────────────────────────────────────────────
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
-            user_transcript,            # tap visitor speech after STT
             context_aggregator.user(),
             llm,
-            agent_transcript,           # tap agent speech after LLM
             tts,
             transport.output(),
             context_aggregator.assistant(),
