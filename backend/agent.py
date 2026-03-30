@@ -26,11 +26,23 @@ from pipecat.services.anthropic import AnthropicLLMService
 from pipecat.services.cartesia import CartesiaTTSService
 
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.frames.frames import (
-    Frame, LLMMessagesFrame, EndFrame,
-    TranscriptionFrame, TextFrame, LLMFullResponseEndFrame,
-)
+from pipecat.frames.frames import LLMMessagesFrame, EndFrame, TranscriptionFrame, TextFrame
+
+# FrameDirection lives in different places across pipecat versions
+try:
+    from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+except ImportError:
+    from pipecat.processors.frame_processor import FrameProcessor
+    FrameDirection = None  # type: ignore
+
+# LLMFullResponseEndFrame was renamed in some pipecat versions
+try:
+    from pipecat.frames.frames import LLMFullResponseEndFrame as _LlmEndFrame
+except ImportError:
+    try:
+        from pipecat.frames.frames import LLMResponseEndFrame as _LlmEndFrame
+    except ImportError:
+        _LlmEndFrame = None  # type: ignore
 
 import config
 
@@ -67,13 +79,17 @@ class _TranscriptBase(FrameProcessor):
 class UserTranscriptForwarder(_TranscriptBase):
     """Between STT and context aggregator — taps final TranscriptionFrames."""
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        if isinstance(frame, TranscriptionFrame):
-            text = (getattr(frame, 'text', '') or '').strip()
-            is_final = getattr(frame, 'is_final', True)
-            if text and is_final:
-                await self._publish({"speaker": "visitor", "text": text})
-        await self.push_frame(frame, direction)
+    async def process_frame(self, frame, direction):
+        try:
+            if isinstance(frame, TranscriptionFrame):
+                text = (getattr(frame, 'text', '') or '').strip()
+                is_final = getattr(frame, 'is_final', True)
+                if text and is_final:
+                    await self._publish({"speaker": "visitor", "text": text})
+        except Exception:
+            pass
+        # MUST call super() — this is what wires the frame into Pipecat's internal queue
+        await super().process_frame(frame, direction)
 
 
 class AgentTranscriptForwarder(_TranscriptBase):
@@ -83,15 +99,19 @@ class AgentTranscriptForwarder(_TranscriptBase):
         super().__init__(transport)
         self._buffer = ""
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        if isinstance(frame, TextFrame):
-            self._buffer += (getattr(frame, 'text', '') or '')
-        elif isinstance(frame, LLMFullResponseEndFrame):
-            text = self._buffer.strip()
-            if text:
-                await self._publish({"speaker": "agent", "text": text})
-            self._buffer = ""
-        await self.push_frame(frame, direction)
+    async def process_frame(self, frame, direction):
+        try:
+            if isinstance(frame, TextFrame):
+                self._buffer += (getattr(frame, 'text', '') or '')
+            elif _LlmEndFrame and isinstance(frame, _LlmEndFrame):
+                text = self._buffer.strip()
+                if text:
+                    await self._publish({"speaker": "agent", "text": text})
+                self._buffer = ""
+        except Exception:
+            pass
+        # MUST call super() — this is what wires the frame into Pipecat's internal queue
+        await super().process_frame(frame, direction)
 
 
 async def run_agent(room_name: str):
