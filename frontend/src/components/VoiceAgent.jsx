@@ -31,7 +31,9 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
   useEffect(() => {
     if (!room) return;
     const handler = (payload, participant, kind, topic) => {
-      if (topic !== "transcript") return;
+      // Accept "transcript" topic, or no topic at all (older LiveKit SDK versions
+      // may not forward the topic parameter to the client).
+      if (topic && topic !== "transcript") return;
       try {
         const msg = JSON.parse(new TextDecoder().decode(payload));
         if (msg.speaker && msg.text) {

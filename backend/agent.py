@@ -12,6 +12,7 @@ Flow:
 
 import asyncio
 import json
+from loguru import logger
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -64,25 +65,34 @@ class _TranscriptList(list):
         text = (content or "").strip()
         if text:
             speaker = "visitor" if role == "user" else "agent"
-            asyncio.create_task(self._publish({"speaker": speaker, "text": text}))
+            logger.debug(f"Transcript: queuing publish for {speaker}: {text[:60]}")
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self._publish({"speaker": speaker, "text": text}))
+            except Exception as e:
+                logger.error(f"Transcript: failed to schedule publish task: {e}")
 
     async def _publish(self, payload):
         """Best-effort — never let a failure here affect the call."""
         try:
             room = getattr(self._transport, "_room", None)
             if not room:
+                logger.error("Transcript: transport._room is None — cannot publish")
                 return
             lp = getattr(room, "local_participant", None)
             if not lp:
+                logger.error("Transcript: local_participant is None — cannot publish")
                 return
             data = json.dumps(payload).encode("utf-8")
             try:
                 await lp.publish_data(data, reliable=True, topic="transcript")
+                logger.debug(f"Transcript: published {payload}")
             except TypeError:
                 from livekit.rtc import DataPacketKind
                 await lp.publish_data(data, DataPacketKind.RELIABLE, topic="transcript")
-        except Exception:
-            pass
+                logger.debug(f"Transcript: published (legacy API) {payload}")
+        except Exception as e:
+            logger.error(f"Transcript: publish failed: {e}")
 
 
 async def run_agent(room_name: str):
