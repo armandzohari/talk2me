@@ -142,8 +142,9 @@ async def run_agent(room_name: str):
         {"role": "user",   "content": "Please greet the visitor warmly and briefly. Introduce yourself as Armand."},
     ]
     context = OpenAILLMContext(messages=messages)
-    # Swap in the transcript-aware list — no pipeline changes needed
-    context.messages = _TranscriptList(list(context.messages), transport)
+    # Swap in the transcript-aware list — no pipeline changes needed.
+    # context.messages is a read-only property; we write to the backing attribute directly.
+    context._messages = _TranscriptList(list(context.messages), transport)
     context_aggregator = llm.create_context_aggregator(context)
 
     # ── TTS: Cartesia (your cloned voice) ───────────────────────────────────
