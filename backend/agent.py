@@ -11,6 +11,7 @@ Flow:
 """
 
 import asyncio
+import json
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -28,6 +29,60 @@ from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.frames.frames import LLMMessagesFrame, EndFrame
 
 import config
+
+
+# ── Transcript interceptor ─────────────────────────────────────────────────────
+# Replaces context.messages with a smart list that publishes each new turn to the
+# LiveKit data channel (topic: "transcript") so the frontend can display it live.
+# This approach avoids touching the Pipecat pipeline entirely.
+
+class _TranscriptList(list):
+    def __init__(self, initial_messages, transport):
+        super().__init__(initial_messages)
+        self._transport = transport
+        # Skip everything already in the list at creation time (system prompt +
+        # greeting trigger). Only newly appended messages get published.
+        self._publish_from = len(initial_messages)
+
+    def append(self, message):
+        super().append(message)
+        idx = len(self) - 1
+        if idx < self._publish_from:
+            return
+        if not isinstance(message, dict):
+            return
+        role = message.get("role", "")
+        if role not in ("user", "assistant"):
+            return
+        content = message.get("content", "")
+        # Anthropic can return content as a list of blocks
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        text = (content or "").strip()
+        if text:
+            speaker = "visitor" if role == "user" else "agent"
+            asyncio.create_task(self._publish({"speaker": speaker, "text": text}))
+
+    async def _publish(self, payload):
+        """Best-effort — never let a failure here affect the call."""
+        try:
+            room = getattr(self._transport, "_room", None)
+            if not room:
+                return
+            lp = getattr(room, "local_participant", None)
+            if not lp:
+                return
+            data = json.dumps(payload).encode("utf-8")
+            try:
+                await lp.publish_data(data, reliable=True, topic="transcript")
+            except TypeError:
+                from livekit.rtc import DataPacketKind
+                await lp.publish_data(data, DataPacketKind.RELIABLE, topic="transcript")
+        except Exception:
+            pass
 
 
 async def run_agent(room_name: str):
@@ -87,6 +142,8 @@ async def run_agent(room_name: str):
         {"role": "user",   "content": "Please greet the visitor warmly and briefly. Introduce yourself as Armand."},
     ]
     context = OpenAILLMContext(messages=messages)
+    # Swap in the transcript-aware list — no pipeline changes needed
+    context.messages = _TranscriptList(list(context.messages), transport)
     context_aggregator = llm.create_context_aggregator(context)
 
     # ── TTS: Cartesia (your cloned voice) ───────────────────────────────────
