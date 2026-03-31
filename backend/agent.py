@@ -75,9 +75,8 @@ class _TranscriptList(list):
     async def _publish(self, payload):
         """Best-effort — never let a failure here affect the call."""
         try:
-            room = getattr(self._transport, "_room", None)
+            room = self._resolve_room()
             if not room:
-                logger.error("Transcript: transport._room is None — cannot publish")
                 return
             lp = getattr(room, "local_participant", None)
             if not lp:
@@ -93,6 +92,33 @@ class _TranscriptList(list):
                 logger.debug(f"Transcript: published (legacy API) {payload}")
         except Exception as e:
             logger.error(f"Transcript: publish failed: {e}")
+
+    def _resolve_room(self):
+        """Walk common Pipecat attribute paths to find the LiveKit Room object."""
+        t = self._transport
+        # Paths tried in priority order — the first non-None wins.
+        # Pipecat 0.0.57 LiveKitTransport → LiveKitTransportClient → _room
+        candidates = [
+            lambda: getattr(t, "_room", None),
+            lambda: getattr(getattr(t, "_client", None), "_room", None),
+            lambda: getattr(getattr(t, "_output", None), "_room", None),
+            lambda: getattr(getattr(t, "_input",  None), "_room", None),
+            lambda: getattr(getattr(getattr(t, "_output", None), "_client", None), "_room", None),
+            lambda: getattr(getattr(getattr(t, "_input",  None), "_client", None), "_room", None),
+        ]
+        for fn in candidates:
+            try:
+                room = fn()
+                if room is not None:
+                    return room
+            except Exception:
+                pass
+        # Nothing worked — log transport attrs once so we can fix for next time
+        logger.error(
+            "Transcript: could not find room on transport. "
+            f"Top-level attrs: {[a for a in dir(t) if not a.startswith('__')]}"
+        )
+        return None
 
 
 async def run_agent(room_name: str):
