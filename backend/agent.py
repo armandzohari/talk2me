@@ -146,27 +146,63 @@ class ConversationLogger:
             filename.write_text(content, encoding="utf-8")
             # Also print to stdout so Railway's log viewer shows the full conversation
             logger.info(f"Conversation log saved → {filename}\n{content}")
-            # Append to Google Doc via Apps Script webhook (best-effort)
-            webhook_url = os.environ.get("GOOGLE_DOC_WEBHOOK_URL", "")
-            if webhook_url:
+            # Append to GitHub file (best-effort)
+            github_token = os.environ.get("GITHUB_TOKEN", "")
+            if github_token:
                 asyncio.get_event_loop().create_task(
-                    self._post_to_google_doc(webhook_url, content)
+                    self._append_to_github(github_token, content)
                 )
         except Exception as e:
             logger.error(f"ConversationLogger.flush() failed: {e}")
 
-    async def _post_to_google_doc(self, webhook_url: str, content: str):
-        """Best-effort POST to the Apps Script webhook to append to Google Doc."""
+    async def _append_to_github(self, token: str, new_content: str):
+        """
+        Appends new_content to conversations.txt in the GitHub repo.
+        Uses the GitHub Contents API: GET current file → append → PUT back.
+        """
+        import httpx, base64
+
+        repo    = "armandzohari/talk2me"
+        path    = "conversations.txt"
+        api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept":        "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.post(webhook_url, json={"log": content})
-                if r.text.strip() == "ok":
-                    logger.info("Conversation log appended to Google Doc ✓")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                # GET current file (may not exist yet)
+                r = await client.get(api_url, headers=headers)
+                if r.status_code == 200:
+                    data        = r.json()
+                    sha         = data["sha"]
+                    existing    = base64.b64decode(data["content"]).decode("utf-8")
+                    updated     = existing + "\n" + new_content
+                    commit_msg  = f"conversation log {self.started_at.strftime('%Y-%m-%d %H:%M UTC')}"
+                elif r.status_code == 404:
+                    sha         = None
+                    updated     = new_content
+                    commit_msg  = "init conversation log"
                 else:
-                    logger.warning(f"Google Doc webhook responded: {r.text[:200]}")
+                    logger.error(f"GitHub GET failed: {r.status_code} {r.text[:200]}")
+                    return
+
+                body = {
+                    "message": commit_msg,
+                    "content": base64.b64encode(updated.encode("utf-8")).decode("utf-8"),
+                }
+                if sha:
+                    body["sha"] = sha
+
+                r2 = await client.put(api_url, headers=headers, json=body)
+                if r2.status_code in (200, 201):
+                    logger.info(f"Conversation appended to github.com/{repo}/{path} ✓")
+                else:
+                    logger.error(f"GitHub PUT failed: {r2.status_code} {r2.text[:200]}")
         except Exception as e:
-            logger.error(f"Google Doc webhook failed: {e}")
+            logger.error(f"GitHub append failed: {e}")
 
 
 # ── Transcript interceptor ─────────────────────────────────────────────────────
