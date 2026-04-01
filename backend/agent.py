@@ -12,6 +12,9 @@ Flow:
 
 import asyncio
 import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 from loguru import logger
 
 from pipecat.pipeline.pipeline import Pipeline
@@ -31,16 +34,130 @@ from pipecat.frames.frames import LLMMessagesFrame, EndFrame
 
 import config
 
+# ── Log directory ──────────────────────────────────────────────────────────────
+LOGS_DIR = Path(__file__).parent / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+
+
+# ── Conversation logger ────────────────────────────────────────────────────────
+
+class ConversationLogger:
+    """
+    Accumulates transcript turns in memory, then writes a human-readable log
+    file to LOGS_DIR when flush() is called (at end of session).
+    """
+
+    def __init__(self, room_name: str, visitor_meta: dict):
+        self.room_name = room_name
+        self.visitor_meta = visitor_meta
+        self.started_at = datetime.now(timezone.utc)
+        self.turns: list[dict] = []   # {"ts": ISO, "speaker": "visitor"|"agent", "text": "..."}
+
+    def add_turn(self, speaker: str, text: str):
+        self.turns.append({
+            "ts":      datetime.now(timezone.utc).isoformat(),
+            "speaker": speaker,
+            "text":    text,
+        })
+
+    def flush(self):
+        """Write the log file. Safe to call more than once (idempotent)."""
+        try:
+            ended_at  = datetime.now(timezone.utc)
+            duration  = int((ended_at - self.started_at).total_seconds())
+            mins, sec = divmod(duration, 60)
+
+            # ── Filename: YYYY-MM-DD_HH-MM-SS_<room>.txt ──────────────────
+            ts_str   = self.started_at.strftime("%Y-%m-%d_%H-%M-%S")
+            filename = LOGS_DIR / f"{ts_str}_{self.room_name}.txt"
+
+            meta = self.visitor_meta
+            geo  = meta.get("geo", {})
+            pua  = meta.get("parsed_ua", {})
+
+            # ── Geo block ─────────────────────────────────────────────────
+            if geo and "country" in geo:
+                location = (
+                    f"{geo.get('city', '')} {geo.get('regionName', '')} "
+                    f"{geo.get('country', '')} ({geo.get('countryCode', '')}) — "
+                    f"ISP: {geo.get('isp', '')} — "
+                    f"Lat/Lon: {geo.get('lat', '')}/{geo.get('lon', '')}"
+                ).strip()
+                timezone_str = geo.get("timezone", "")
+            else:
+                location     = geo.get("note", "unavailable")
+                timezone_str = ""
+
+            # ── UA block ──────────────────────────────────────────────────
+            if "browser" in pua:
+                device_type = "Mobile" if pua.get("is_mobile") else (
+                    "Tablet" if pua.get("is_tablet") else "Desktop"
+                )
+                ua_line = (
+                    f"{pua.get('browser', '')} on "
+                    f"{pua.get('os', '')}  [{device_type}]"
+                    + (f"  {pua.get('device_brand','')} {pua.get('device_model','')}".rstrip()
+                       if pua.get("device_brand") else "")
+                )
+            else:
+                ua_line = pua.get("raw", "unknown")
+
+            sep = "=" * 72
+
+            lines = [
+                sep,
+                "Talk2Me — Conversation Log",
+                sep,
+                f"Session   : {self.room_name}",
+                f"Started   : {self.started_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"Ended     : {ended_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"Duration  : {mins}m {sec:02d}s",
+                "",
+                "VISITOR INFORMATION",
+                "-" * 36,
+                f"IP Address: {meta.get('ip', 'unknown')}",
+                f"Location  : {location}",
+                f"Timezone  : {timezone_str}",
+                f"Browser   : {ua_line}",
+                f"Referrer  : {meta.get('referrer', '') or '(direct)'}",
+                f"Language  : {meta.get('accept_lang', '')}",
+                f"User-Agent: {meta.get('user_agent', '')}",
+                "",
+                "CONVERSATION TRANSCRIPT",
+                "-" * 36,
+            ]
+
+            if self.turns:
+                for turn in self.turns:
+                    ts      = turn["ts"][11:19]   # HH:MM:SS from ISO
+                    speaker = config.AGENT_NAME if turn["speaker"] == "agent" else "Visitor"
+                    lines.append(f"[{ts}] {speaker}: {turn['text']}")
+            else:
+                lines.append("(no conversation recorded)")
+
+            lines += [
+                "",
+                sep,
+                f"End of log — {len(self.turns)} turn(s)",
+                sep,
+            ]
+
+            filename.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            logger.info(f"Conversation log saved → {filename}")
+        except Exception as e:
+            logger.error(f"ConversationLogger.flush() failed: {e}")
+
 
 # ── Transcript interceptor ─────────────────────────────────────────────────────
-# Replaces context.messages with a smart list that publishes each new turn to the
-# LiveKit data channel (topic: "transcript") so the frontend can display it live.
-# This approach avoids touching the Pipecat pipeline entirely.
+# Replaces context.messages with a smart list that:
+#   1. Publishes each new turn to the LiveKit data channel (frontend transcript panel)
+#   2. Records each turn in ConversationLogger for the server-side log file
 
 class _TranscriptList(list):
-    def __init__(self, initial_messages, transport):
+    def __init__(self, initial_messages, transport, conv_logger: ConversationLogger):
         super().__init__(initial_messages)
-        self._transport = transport
+        self._transport   = transport
+        self._conv_logger = conv_logger
         # Skip everything already in the list at creation time (system prompt +
         # greeting trigger). Only newly appended messages get published.
         self._publish_from = len(initial_messages)
@@ -65,6 +182,8 @@ class _TranscriptList(list):
         text = (content or "").strip()
         if text:
             speaker = "visitor" if role == "user" else "agent"
+            # Record in server-side log
+            self._conv_logger.add_turn(speaker, text)
             logger.debug(f"Transcript: queuing publish for {speaker}: {text[:60]}")
             try:
                 loop = asyncio.get_event_loop()
@@ -96,8 +215,6 @@ class _TranscriptList(list):
     def _resolve_room(self):
         """Walk common Pipecat attribute paths to find the LiveKit Room object."""
         t = self._transport
-        # Paths tried in priority order — the first non-None wins.
-        # Pipecat 0.0.57 LiveKitTransport → LiveKitTransportClient → _room
         candidates = [
             lambda: getattr(t, "_room", None),
             lambda: getattr(getattr(t, "_client", None), "_room", None),
@@ -113,7 +230,6 @@ class _TranscriptList(list):
                     return room
             except Exception:
                 pass
-        # Nothing worked — log transport attrs once so we can fix for next time
         logger.error(
             "Transcript: could not find room on transport. "
             f"Top-level attrs: {[a for a in dir(t) if not a.startswith('__')]}"
@@ -121,8 +237,11 @@ class _TranscriptList(list):
         return None
 
 
-async def run_agent(room_name: str):
-    # ── Transport (LiveKit WebRTC) ──────────────────────────────────────────
+async def run_agent(room_name: str, visitor_meta: dict | None = None):
+    # ── Conversation logger ────────────────────────────────────────────────
+    conv_logger = ConversationLogger(room_name, visitor_meta or {})
+
+    # ── Transport (LiveKit WebRTC) ─────────────────────────────────────────
     transport = LiveKitTransport(
         url=config.LIVEKIT_URL,
         token=_mint_agent_token(room_name),
@@ -144,7 +263,7 @@ async def run_agent(room_name: str):
         ),
     )
 
-    # ── STT: Deepgram (streaming) ───────────────────────────────────────────
+    # ── STT: Deepgram (streaming) ──────────────────────────────────────────
     # NOTE: sample_rate MUST be a top-level param here.
     # Pipecat's DeepgramSTTService.start() does:
     #   self._settings["sample_rate"] = self.sample_rate
@@ -166,7 +285,7 @@ async def run_agent(room_name: str):
         ),
     )
 
-    # ── LLM: Claude ────────────────────────────────────────────────────────
+    # ── LLM: Claude ───────────────────────────────────────────────────────
     llm = AnthropicLLMService(
         api_key=config.ANTHROPIC_API_KEY,
         model="claude-sonnet-4-6",
@@ -180,17 +299,17 @@ async def run_agent(room_name: str):
     context = OpenAILLMContext(messages=messages)
     # Swap in the transcript-aware list — no pipeline changes needed.
     # context.messages is a read-only property; we write to the backing attribute directly.
-    context._messages = _TranscriptList(list(context.messages), transport)
+    context._messages = _TranscriptList(list(context.messages), transport, conv_logger)
     context_aggregator = llm.create_context_aggregator(context)
 
-    # ── TTS: Cartesia (your cloned voice) ───────────────────────────────────
+    # ── TTS: Cartesia (your cloned voice) ──────────────────────────────────
     tts = CartesiaTTSService(
         api_key=config.CARTESIA_API_KEY,
         voice_id=config.CARTESIA_VOICE_ID,
         model="sonic-2",
     )
 
-    # ── Assemble the pipeline ──────────────────────────────────────────────
+    # ── Assemble the pipeline ─────────────────────────────────────────────
     pipeline = Pipeline(
         [
             transport.input(),
@@ -213,13 +332,18 @@ async def run_agent(room_name: str):
     async def on_first_participant_joined(transport, participant):
         await task.queue_frames([LLMMessagesFrame(messages)])
 
-    # End pipeline when visitor leaves
+    # End pipeline and flush log when visitor leaves
     @transport.event_handler("on_participant_disconnected")
     async def on_disconnect(transport, participant):
+        conv_logger.flush()
         await task.queue_frame(EndFrame())
 
     runner = PipelineRunner()
     await runner.run(task)
+
+    # Flush again as a safety net in case on_participant_disconnected didn't fire
+    # (e.g. server restart, network drop). flush() is idempotent.
+    conv_logger.flush()
 
 
 def _mint_agent_token(room_name: str) -> str:
