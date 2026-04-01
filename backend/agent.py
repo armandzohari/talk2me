@@ -146,8 +146,27 @@ class ConversationLogger:
             filename.write_text(content, encoding="utf-8")
             # Also print to stdout so Railway's log viewer shows the full conversation
             logger.info(f"Conversation log saved → {filename}\n{content}")
+            # Append to Google Doc via Apps Script webhook (best-effort)
+            webhook_url = os.environ.get("GOOGLE_DOC_WEBHOOK_URL", "")
+            if webhook_url:
+                asyncio.get_event_loop().create_task(
+                    self._post_to_google_doc(webhook_url, content)
+                )
         except Exception as e:
             logger.error(f"ConversationLogger.flush() failed: {e}")
+
+    async def _post_to_google_doc(self, webhook_url: str, content: str):
+        """Best-effort POST to the Apps Script webhook to append to Google Doc."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(webhook_url, json={"log": content})
+                if r.text.strip() == "ok":
+                    logger.info("Conversation log appended to Google Doc ✓")
+                else:
+                    logger.warning(f"Google Doc webhook responded: {r.text[:200]}")
+        except Exception as e:
+            logger.error(f"Google Doc webhook failed: {e}")
 
 
 # ── Transcript interceptor ─────────────────────────────────────────────────────
