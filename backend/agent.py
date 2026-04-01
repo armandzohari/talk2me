@@ -142,8 +142,10 @@ class ConversationLogger:
                 sep,
             ]
 
-            filename.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            logger.info(f"Conversation log saved → {filename}")
+            content = "\n".join(lines) + "\n"
+            filename.write_text(content, encoding="utf-8")
+            # Also print to stdout so Railway's log viewer shows the full conversation
+            logger.info(f"Conversation log saved → {filename}\n{content}")
         except Exception as e:
             logger.error(f"ConversationLogger.flush() failed: {e}")
 
