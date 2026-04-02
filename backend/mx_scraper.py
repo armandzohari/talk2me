@@ -2,15 +2,16 @@
 mx_scraper.py — scrapes upcoming events from mx-tickets.com
 
 Strategy:
-  1. Fetch the Next.js page for the relevant region (en-GB = Europe, en-US = Americas)
-  2. Extract __NEXT_DATA__ JSON which contains structured event + track data with coordinates
-  3. Geocode the requested city via OpenStreetMap Nominatim (free, no key)
-  4. Filter events by distance from the city (within radius_km, default 200 km)
-  5. Return a short plain-text summary suitable for reading aloud
-
-Falls back to a keyword match if coordinates are unavailable.
+  1. Fetch the events page (en-GB = Europe, en-US = Americas)
+  2. Parse plain text to extract (date, event_name, @trackslug) tuples
+  3. Fetch each unique track page at /t/{slug} and extract lat/lon from JSON-LD
+     — track pages are cached in memory so repeated queries are fast
+  4. Geocode the requested city via OpenStreetMap Nominatim (free, no key)
+  5. Filter events by haversine distance ≤ radius_km
+  6. Return a short plain-text summary for reading aloud
 """
 
+import asyncio
 import json
 import math
 import re
@@ -20,20 +21,27 @@ from typing import Optional
 import httpx
 from loguru import logger
 
-# ── Haversine distance ──────────────────────────────────────────────────────
+# ── In-memory track location cache  ────────────────────────────────────────
+# {slug: (lat, lon) | None}  — None means "fetched but no coords found"
+_TRACK_CACHE: dict[str, Optional[tuple[float, float]]] = {}
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; Talk2Me/1.0)",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     R = 6371
-    d_lat = math.radians(lat2 - lat1)
-    d_lon = math.radians(lon2 - lon1)
-    a = math.sin(d_lat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon/2)**2
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     return R * 2 * math.asin(math.sqrt(a))
 
 
-# ── Geocode a city via OSM Nominatim ───────────────────────────────────────
-
 async def _geocode_city(city: str, client: httpx.AsyncClient) -> Optional[tuple[float, float]]:
-    """Returns (lat, lon) or None."""
     try:
         r = await client.get(
             "https://nominatim.openstreetmap.org/search",
@@ -41,194 +49,152 @@ async def _geocode_city(city: str, client: httpx.AsyncClient) -> Optional[tuple[
             headers={"User-Agent": "Talk2Me/1.0 (mx-tickets event finder)"},
             timeout=5.0,
         )
-        results = r.json()
-        if results:
-            return float(results[0]["lat"]), float(results[0]["lon"])
+        data = r.json()
+        if data:
+            return float(data[0]["lat"]), float(data[0]["lon"])
     except Exception as e:
         logger.warning(f"Geocode failed for '{city}': {e}")
     return None
 
 
-# ── Extract events from Next.js __NEXT_DATA__ ─────────────────────────────
+def _extract_coords_from_page(html: str) -> Optional[tuple[float, float]]:
+    """Extract lat/lon from the JSON-LD GeoCoordinates block embedded in track pages."""
+    match = re.search(r'"geo"\s*:\s*\{[^}]*"latitude"\s*:\s*([\d.\-]+)[^}]*"longitude"\s*:\s*([\d.\-]+)', html)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    # Try reversed order
+    match = re.search(r'"geo"\s*:\s*\{[^}]*"longitude"\s*:\s*([\d.\-]+)[^}]*"latitude"\s*:\s*([\d.\-]+)', html)
+    if match:
+        return float(match.group(2)), float(match.group(1))
+    return None
 
-def _parse_next_data(html: str) -> Optional[dict]:
-    """Pull the __NEXT_DATA__ JSON blob from a Next.js page."""
-    match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-    if not match:
-        return None
+
+async def _fetch_track_coords(slug: str, client: httpx.AsyncClient) -> Optional[tuple[float, float]]:
+    """Fetch a track page and return (lat, lon) or None. Results are cached."""
+    if slug in _TRACK_CACHE:
+        return _TRACK_CACHE[slug]
     try:
-        return json.loads(match.group(1))
-    except Exception:
+        r = await client.get(
+            f"https://mx-tickets.com/en-GB/t/{slug}",
+            headers=HEADERS,
+            timeout=6.0,
+        )
+        coords = _extract_coords_from_page(r.text)
+        _TRACK_CACHE[slug] = coords
+        return coords
+    except Exception as e:
+        logger.warning(f"Track fetch failed for '{slug}': {e}")
+        _TRACK_CACHE[slug] = None
         return None
 
 
-def _extract_events_from_next_data(data: dict) -> list[dict]:
+# ── Parse events page text ──────────────────────────────────────────────────
+
+def _parse_events_page(text: str) -> list[dict]:
     """
-    Walk the Next.js page props to find event + track records.
-    Returns list of dicts: {date, name, track_name, track_slug, lat, lon}
+    Parse the plain-text content of mx-tickets.com/events.
+    Text format per event: `53°Event Name@trackslug`
+    Dates appear as: `Thursday, 2 Apr 2026` or `Thursday, Apr 2, 2026`
+    Returns list of {date, name, slug}
     """
     events = []
-    raw = json.dumps(data)  # flatten for broad search
+    current_date = ""
 
-    # Try common paths for events list
-    props = data.get("props", {})
-    page_props = props.get("pageProps", {})
+    # Date patterns: "Thursday, 2 Apr 2026" or "Thursday, Apr 2, 2026"
+    date_re = re.compile(
+        r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+'
+        r'(?:\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4})'
+    )
+    # Event pattern: optional temp + event name + @slug
+    event_re = re.compile(r'(?:\d+°)([^@\n]+)@([a-z0-9\-]+)')
 
-    # Look for events array anywhere in pageProps
-    for key, val in page_props.items():
-        if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
-            candidate = val
-            for item in candidate:
-                ev = _normalise_event(item)
-                if ev:
-                    events.append(ev)
+    for line in re.split(r'(?=(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),)', text):
+        date_match = date_re.match(line.strip())
+        if date_match:
+            current_date = date_match.group(0).strip()
 
-    # If nothing found via pageProps, try a broader scan
-    if not events:
-        events = _scan_for_events(data)
+        for ev_match in event_re.finditer(line):
+            name = ev_match.group(1).strip()
+            slug = ev_match.group(2).strip()
+            if name and slug:
+                events.append({
+                    "date": current_date,
+                    "name": name,
+                    "slug": slug,
+                })
 
     return events
 
 
-def _normalise_event(item: dict) -> Optional[dict]:
-    """Try to extract a standardised event dict from a raw item."""
-    # Common field name patterns seen in MX sites
-    name = (item.get("title") or item.get("name") or item.get("eventName") or "")
-    date_raw = (item.get("date") or item.get("startDate") or item.get("start") or "")
-    track = item.get("track") or item.get("club") or {}
-    if isinstance(track, str):
-        track_name = track
-        lat = lon = None
-    else:
-        track_name = track.get("name") or track.get("title") or ""
-        lat = track.get("lat") or track.get("latitude")
-        lon = track.get("lon") or track.get("longitude") or track.get("lng")
-    slug = item.get("slug") or track.get("slug") if isinstance(track, dict) else None
-
-    if not name and not track_name:
-        return None
-    return {
-        "name":       name or track_name,
-        "track_name": track_name,
-        "slug":       slug or "",
-        "date":       str(date_raw)[:10],
-        "lat":        float(lat) if lat is not None else None,
-        "lon":        float(lon) if lon is not None else None,
-    }
-
-
-def _scan_for_events(data: dict, depth=0) -> list[dict]:
-    """Recursively scan for any list that looks like events."""
-    if depth > 6:
-        return []
-    events = []
-    if isinstance(data, dict):
-        for v in data.values():
-            events.extend(_scan_for_events(v, depth+1))
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict):
-                ev = _normalise_event(item)
-                if ev and (ev["lat"] is not None or ev["date"]):
-                    events.append(ev)
-                else:
-                    events.extend(_scan_for_events(item, depth+1))
-    return events
-
-
-# ── Fallback: parse plain text from the events page ───────────────────────
-
-def _parse_text_events(text: str, city_keyword: str) -> list[str]:
-    """
-    If __NEXT_DATA__ parsing fails, do a keyword search on the raw page text.
-    Looks for lines containing the city name (case-insensitive).
-    """
-    city_lower = city_keyword.lower()
-    matches = []
-    lines = text.split("\n")
-    for line in lines:
-        if city_lower in line.lower() and len(line.strip()) > 10:
-            matches.append(line.strip())
-    return matches[:10]
-
-
-# ── Main public function ───────────────────────────────────────────────────
+# ── Main public function ────────────────────────────────────────────────────
 
 async def find_events_near_city(
     city: str,
     region: str = "europe",
     radius_km: int = 200,
-    max_results: int = 5,
+    max_results: int = 6,
 ) -> str:
-    """
-    Returns a short plain-text summary of upcoming MX events near `city`.
-    `region` should be "europe" or "americas".
-    """
     locale = "en-GB" if region.lower() in ("europe", "eu") else "en-US"
     url = f"https://mx-tickets.com/{locale}/events"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Talk2Me/1.0)",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
 
         # 1. Geocode the city
         city_coords = await _geocode_city(city, client)
         logger.info(f"MX search: city={city} coords={city_coords} region={region}")
+        if not city_coords:
+            return f"Couldn't geocode '{city}', doc — try a bigger city nearby!"
 
         # 2. Fetch events page
         try:
-            r = await client.get(url, headers=headers)
-            html = r.text
+            r = await client.get(url, headers=HEADERS)
+            page_text = r.text
         except Exception as e:
-            logger.error(f"MX scrape fetch failed: {e}")
-            return f"Sorry doc, I couldn't reach mx-tickets.com right now. Try again in a bit!"
+            logger.error(f"MX events page fetch failed: {e}")
+            return "Couldn't reach mx-tickets.com right now, doc — try again in a bit!"
 
-        # 3. Try to parse structured Next.js data
-        next_data = _parse_next_data(html)
-        structured_events = []
-        if next_data:
-            structured_events = _extract_events_from_next_data(next_data)
-            logger.info(f"MX scrape: found {len(structured_events)} structured events")
+        # 3. Parse events from page text
+        # Strip HTML tags first
+        clean = re.sub(r'<[^>]+>', ' ', page_text)
+        clean = re.sub(r'\s+', ' ', clean)
+        events = _parse_events_page(clean)
+        logger.info(f"MX scrape: parsed {len(events)} events from page text")
 
-        # 4. If we have coords + structured events, filter by distance
-        if city_coords and structured_events:
-            city_lat, city_lon = city_coords
-            nearby = []
-            for ev in structured_events:
-                if ev["lat"] is not None and ev["lon"] is not None:
-                    dist = _haversine_km(city_lat, city_lon, ev["lat"], ev["lon"])
-                    if dist <= radius_km:
-                        ev["dist_km"] = round(dist)
-                        nearby.append(ev)
-            nearby.sort(key=lambda e: (e.get("date", ""), e.get("dist_km", 9999)))
-            nearby = nearby[:max_results]
+        if not events:
+            return f"No events found on mx-tickets.com right now — the site may have changed its layout, doc!"
 
-            if nearby:
-                lines = [f"Upcoming MX events within {radius_km} km of {city}:"]
-                for ev in nearby:
-                    date = ev.get("date", "TBD")
-                    name = ev.get("name") or ev.get("track_name")
-                    dist = ev.get("dist_km", "?")
-                    lines.append(f"  • {date} — {name} (~{dist} km away)")
-                return "\n".join(lines)
+        # 4. Fetch coords for all unique slugs concurrently
+        unique_slugs = list({e["slug"] for e in events if e["slug"] not in _TRACK_CACHE})
+        if unique_slugs:
+            logger.info(f"MX scrape: fetching coords for {len(unique_slugs)} tracks")
+            await asyncio.gather(*[_fetch_track_coords(s, client) for s in unique_slugs])
 
-        # 5. Fallback: keyword search on the raw page text
-        # Strip HTML tags for cleaner text
-        text_only = re.sub(r"<[^>]+>", " ", html)
-        text_only = re.sub(r"\s+", " ", text_only)
-        keyword_matches = _parse_text_events(text_only, city)
+        # 5. Filter by distance
+        city_lat, city_lon = city_coords
+        nearby = []
+        seen = set()  # deduplicate same track/date combo
 
-        if keyword_matches:
-            lines = [f"Events mentioning '{city}' on mx-tickets.com:"]
-            for m in keyword_matches:
-                lines.append(f"  • {m}")
-            return "\n".join(lines)
+        for ev in events:
+            coords = _TRACK_CACHE.get(ev["slug"])
+            if not coords:
+                continue
+            dist = _haversine_km(city_lat, city_lon, coords[0], coords[1])
+            if dist <= radius_km:
+                key = (ev["slug"], ev["date"])
+                if key not in seen:
+                    seen.add(key)
+                    nearby.append({**ev, "dist_km": round(dist)})
 
-        # 6. Nothing found
-        return (
-            f"No upcoming MX events found near {city} within {radius_km} km. "
-            f"Check mx-tickets.com directly for the full list!"
-        )
+        nearby.sort(key=lambda e: (e["date"] or "9999", e["dist_km"]))
+        nearby = nearby[:max_results]
+
+        if not nearby:
+            return (
+                f"No upcoming MX events within {radius_km} km of {city}, doc! "
+                f"Check mx-tickets.com for the full list."
+            )
+
+        lines = [f"Upcoming MX events within {radius_km} km of {city}:"]
+        for ev in nearby:
+            lines.append(f"  • {ev['date']} — {ev['name']} at @{ev['slug']} (~{ev['dist_km']} km)")
+        return "\n".join(lines)
