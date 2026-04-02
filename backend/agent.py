@@ -351,7 +351,7 @@ async def run_agent(room_name: str, visitor_meta: dict | None = None):
     # Conversation context — system prompt + greeting trigger
     messages = [
         {"role": "system", "content": config.SYSTEM_PROMPT},
-        {"role": "user",   "content": "Please greet the visitor warmly and briefly. Introduce yourself as Armand."},
+        {"role": "user",   "content": "Please greet the visitor. Start with 'What's up, doc?' and briefly introduce yourself as Armando, Bugs Bunny's twin."},
     ]
     context = OpenAILLMContext(messages=messages)
     # Swap in the transcript-aware list — no pipeline changes needed.
