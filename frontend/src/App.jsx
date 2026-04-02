@@ -3,7 +3,7 @@ import { LiveKitRoom } from "@livekit/components-react";
 import VoiceAgent from "./components/VoiceAgent";
 
 const AGENT_NAME = "Armando";
-const PHOTO_URL = "/bugs1.PNG";
+const PHOTO_URL = "/bugs bunny chews.gif";
 
 export default function App() {
   const [session, setSession] = useState(null);
