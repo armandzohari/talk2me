@@ -2,8 +2,8 @@ import { useState, useCallback, useEffect } from "react";
 import { LiveKitRoom } from "@livekit/components-react";
 import VoiceAgent from "./components/VoiceAgent";
 
-const AGENT_NAME = "Armand";
-const PHOTO_URL = "/armand.png"; // Drop your photo here: frontend/public/armand.png
+const AGENT_NAME = "Armando";
+const PHOTO_URL = "/bugs1.PNG";
 
 export default function App() {
   const [session, setSession] = useState(null);
