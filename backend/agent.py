@@ -348,12 +348,51 @@ async def run_agent(room_name: str, visitor_meta: dict | None = None):
         model="claude-sonnet-4-6",
     )
 
+    # ── Tool: search MX events near a city ────────────────────────────────
+    tools = [
+        {
+            "name": "find_mx_events",
+            "description": (
+                "Search mx-tickets.com for upcoming motocross events near a city. "
+                "Call this whenever the visitor asks about events, races, training, or tracks near a location."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "city":   {"type": "string", "description": "City or town to search near"},
+                    "region": {
+                        "type": "string",
+                        "enum": ["europe", "americas"],
+                        "description": "Which region — 'europe' or 'americas'. Guess from city name if not stated.",
+                    },
+                    "radius_km": {
+                        "type": "integer",
+                        "description": "Search radius in km (default 200)",
+                        "default": 200,
+                    },
+                },
+                "required": ["city", "region"],
+            },
+        }
+    ]
+
+    async def find_mx_events_handler(function_name, tool_call_id, args, llm, context, result_callback):
+        from mx_scraper import find_events_near_city
+        city      = args.get("city", "")
+        region    = args.get("region", "europe")
+        radius_km = int(args.get("radius_km", 200))
+        logger.info(f"Tool call: find_mx_events city={city} region={region} radius={radius_km}km")
+        result = await find_events_near_city(city=city, region=region, radius_km=radius_km)
+        await result_callback(result)
+
+    llm.register_function("find_mx_events", find_mx_events_handler)
+
     # Conversation context — system prompt + greeting trigger
     messages = [
         {"role": "system", "content": config.SYSTEM_PROMPT},
         {"role": "user",   "content": "Please greet the visitor. Start with 'What's up, doc?' and briefly introduce yourself as Armando, Bugs Bunny's twin."},
     ]
-    context = OpenAILLMContext(messages=messages)
+    context = OpenAILLMContext(messages=messages, tools=tools)
     # Swap in the transcript-aware list — no pipeline changes needed.
     # context.messages is a read-only property; we write to the backing attribute directly.
     context._messages = _TranscriptList(list(context.messages), transport, conv_logger)
