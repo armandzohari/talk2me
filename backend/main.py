@@ -1,4 +1,6 @@
 import asyncio
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -7,10 +9,32 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from livekit.api import LiveKitAPI, CreateRoomRequest, AccessToken, VideoGrants
+from loguru import logger
 
 import config
 
 app = FastAPI(title="Talk2Me API")
+
+
+@app.on_event("startup")
+async def install_playwright_browsers():
+    """
+    Ensure Playwright's Chromium binary is present.
+    Railway installs the Python package but doesn't always run
+    'playwright install' — so we do it here on first boot.
+    It's a no-op if the browser is already installed.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"],
+            capture_output=True, text=True, timeout=180
+        )
+        if result.returncode == 0:
+            logger.info("Playwright Chromium ready ✓")
+        else:
+            logger.warning(f"playwright install returned {result.returncode}: {result.stderr[:300]}")
+    except Exception as e:
+        logger.error(f"playwright install failed at startup: {e}")
 
 app.add_middleware(
     CORSMiddleware,
