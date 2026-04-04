@@ -2,17 +2,17 @@
 mx_scraper.py — scrapes upcoming events from mx-tickets.com
 
 Strategy:
-  1. Fetch the events page (en-GB = Europe, en-US = Americas)
-  2. Parse plain text to extract (date, event_name, @trackslug) tuples
-  3. Fetch each unique track page at /t/{slug} and extract lat/lon from JSON-LD
+  1. Launch headless Chromium via Playwright to render the CSR page
+  2. Navigate to /en-GB/events (Europe) or /en-US/events (Americas) based on region
+  3. Wait for Firebase to populate the DOM, then extract date headers + event links
+  4. Fetch each unique track page at /t/{slug} with httpx to get lat/lon from JSON-LD
      — track pages are cached in memory so repeated queries are fast
-  4. Geocode the requested city via OpenStreetMap Nominatim (free, no key)
-  5. Filter events by haversine distance ≤ radius_km
-  6. Return a short plain-text summary for reading aloud
+  5. Geocode the requested city via OpenStreetMap Nominatim (free, no key)
+  6. Filter events by haversine distance ≤ radius_km
+  7. Return a short plain-text summary + event URLs for "open the page" feature
 """
 
 import asyncio
-import json
 import math
 import re
 from datetime import datetime, timezone
@@ -21,23 +21,24 @@ from typing import Optional
 import httpx
 from loguru import logger
 
-# ── In-memory track location cache  ────────────────────────────────────────
-# {slug: (lat, lon) | None}  — None means "fetched but no coords found"
+# ── In-memory track location cache ──────────────────────────────────────────
 _TRACK_CACHE: dict[str, Optional[tuple[float, float]]] = {}
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; Talk2Me/1.0)",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
     return R * 2 * math.asin(math.sqrt(a))
 
 
@@ -58,19 +59,17 @@ async def _geocode_city(city: str, client: httpx.AsyncClient) -> Optional[tuple[
 
 
 def _extract_coords_from_page(html: str) -> Optional[tuple[float, float]]:
-    """Extract lat/lon from the JSON-LD GeoCoordinates block embedded in track pages."""
-    match = re.search(r'"geo"\s*:\s*\{[^}]*"latitude"\s*:\s*([\d.\-]+)[^}]*"longitude"\s*:\s*([\d.\-]+)', html)
-    if match:
-        return float(match.group(1)), float(match.group(2))
-    # Try reversed order
-    match = re.search(r'"geo"\s*:\s*\{[^}]*"longitude"\s*:\s*([\d.\-]+)[^}]*"latitude"\s*:\s*([\d.\-]+)', html)
-    if match:
-        return float(match.group(2)), float(match.group(1))
+    """Extract lat/lon from the JSON-LD GeoCoordinates block on track pages."""
+    m = re.search(r'"geo"\s*:\s*\{[^}]*"latitude"\s*:\s*([\d.\-]+)[^}]*"longitude"\s*:\s*([\d.\-]+)', html)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+    m = re.search(r'"geo"\s*:\s*\{[^}]*"longitude"\s*:\s*([\d.\-]+)[^}]*"latitude"\s*:\s*([\d.\-]+)', html)
+    if m:
+        return float(m.group(2)), float(m.group(1))
     return None
 
 
 async def _fetch_track_coords(slug: str, client: httpx.AsyncClient) -> Optional[tuple[float, float]]:
-    """Fetch a track page and return (lat, lon) or None. Results are cached."""
     if slug in _TRACK_CACHE:
         return _TRACK_CACHE[slug]
     try:
@@ -88,45 +87,76 @@ async def _fetch_track_coords(slug: str, client: httpx.AsyncClient) -> Optional[
         return None
 
 
-# ── Parse events page text ──────────────────────────────────────────────────
+# ── Playwright page scrape ────────────────────────────────────────────────────
 
-def _parse_events_page(text: str) -> list[dict]:
+async def _scrape_events_with_playwright(locale: str) -> list[dict]:
     """
-    Parse the plain-text content of mx-tickets.com/events.
-    Text format per event: `53°Event Name@trackslug`
-    Dates appear as: `Thursday, 2 Apr 2026` or `Thursday, Apr 2, 2026`
-    Returns list of {date, name, slug}
+    Launch headless Chromium, load the events page, wait for Firebase to render
+    the event list, then extract date/name/slug/url from the DOM.
+
+    Returns list of {date, name, slug, url}.
     """
+    from playwright.async_api import async_playwright
+
+    url = f"https://mx-tickets.com/{locale}/events"
     events = []
-    current_date = ""
 
-    # Date patterns: "Thursday, 2 Apr 2026" or "Thursday, Apr 2, 2026"
-    date_re = re.compile(
-        r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+'
-        r'(?:\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4})'
-    )
-    # Event pattern: optional temp + event name + @slug
-    event_re = re.compile(r'(?:\d+°)([^@\n]+)@([a-z0-9\-]+)')
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            page = await browser.new_page(
+                user_agent=HEADERS["User-Agent"],
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
 
-    for line in re.split(r'(?=(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),)', text):
-        date_match = date_re.match(line.strip())
-        if date_match:
-            current_date = date_match.group(0).strip()
+            # Wait until at least one event link appears (Firebase has populated the DOM)
+            await page.wait_for_selector('a[href*="/events/"]', timeout=15_000)
 
-        for ev_match in event_re.finditer(line):
-            name = ev_match.group(1).strip()
-            slug = ev_match.group(2).strip()
-            if name and slug:
-                events.append({
-                    "date": current_date,
-                    "name": name,
-                    "slug": slug,
-                })
+            # Allow a little extra time for more events to stream in
+            await asyncio.sleep(2)
 
-    return events
+            # Extract date headers and event links in DOM order
+            events = await page.evaluate("""
+                () => {
+                    const items = Array.from(document.querySelectorAll(
+                        'li.MuiListSubheader-root, a[href*="/events/"]'
+                    ));
+                    const result = [];
+                    let currentDate = '';
+                    for (const el of items) {
+                        if (el.tagName === 'LI') {
+                            currentDate = el.textContent.trim();
+                        } else {
+                            const text = el.innerText.trim();
+                            const href = el.getAttribute('href') || '';
+                            const m = href.match(/\\/t\\/([^\\/]+)\\/events\\//);
+                            if (m && text) {
+                                // Clean name: strip leading "58°" temperature prefix
+                                const name = text.replace(/^\\d+°/, '').replace(/@[a-z0-9\\-]+$/i, '').trim();
+                                result.push({
+                                    date: currentDate,
+                                    name: name || text,
+                                    slug: m[1],
+                                    url: 'https://mx-tickets.com' + href
+                                });
+                            }
+                        }
+                    }
+                    return result;
+                }
+            """)
+
+            logger.info(f"Playwright scraped {len(events)} events from {url}")
+        except Exception as e:
+            logger.error(f"Playwright scrape failed: {e}")
+        finally:
+            await browser.close()
+
+    return events or []
 
 
-# ── Main public function ────────────────────────────────────────────────────
+# ── Main public function ──────────────────────────────────────────────────────
 
 async def find_events_near_city(
     city: str,
@@ -135,44 +165,34 @@ async def find_events_near_city(
     max_results: int = 6,
 ) -> str:
     locale = "en-GB" if region.lower() in ("europe", "eu") else "en-US"
-    url = f"https://mx-tickets.com/{locale}/events"
 
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
 
-        # 1. Geocode the city
-        city_coords = await _geocode_city(city, client)
-        logger.info(f"MX search: city={city} coords={city_coords} region={region}")
+        # 1. Geocode the city and scrape events page concurrently
+        city_coords_task = asyncio.create_task(_geocode_city(city, client))
+        events_task = asyncio.create_task(_scrape_events_with_playwright(locale))
+
+        city_coords = await city_coords_task
+        events = await events_task
+
+        logger.info(f"MX search: city={city} coords={city_coords} region={region} events={len(events)}")
+
         if not city_coords:
             return f"Couldn't geocode '{city}', doc — try a bigger city nearby!"
 
-        # 2. Fetch events page
-        try:
-            r = await client.get(url, headers=HEADERS)
-            page_text = r.text
-        except Exception as e:
-            logger.error(f"MX events page fetch failed: {e}")
-            return "Couldn't reach mx-tickets.com right now, doc — try again in a bit!"
-
-        # 3. Parse events from page text
-        # Strip HTML tags first
-        clean = re.sub(r'<[^>]+>', ' ', page_text)
-        clean = re.sub(r'\s+', ' ', clean)
-        events = _parse_events_page(clean)
-        logger.info(f"MX scrape: parsed {len(events)} events from page text")
-
         if not events:
-            return f"No events found on mx-tickets.com right now — the site may have changed its layout, doc!"
+            return "Couldn't load mx-tickets.com events right now, doc — try again in a bit!"
 
-        # 4. Fetch coords for all unique slugs concurrently
-        unique_slugs = list({e["slug"] for e in events if e["slug"] not in _TRACK_CACHE})
+        # 2. Fetch coords for all unique slugs concurrently
+        unique_slugs = [s for s in {e["slug"] for e in events} if s not in _TRACK_CACHE]
         if unique_slugs:
             logger.info(f"MX scrape: fetching coords for {len(unique_slugs)} tracks")
             await asyncio.gather(*[_fetch_track_coords(s, client) for s in unique_slugs])
 
-        # 5. Filter by distance
+        # 3. Filter by distance
         city_lat, city_lon = city_coords
         nearby = []
-        seen = set()  # deduplicate same track/date combo
+        seen: set[tuple[str, str]] = set()
 
         for ev in events:
             coords = _TRACK_CACHE.get(ev["slug"])
@@ -185,7 +205,7 @@ async def find_events_near_city(
                     seen.add(key)
                     nearby.append({**ev, "dist_km": round(dist)})
 
-        nearby.sort(key=lambda e: (e["date"] or "9999", e["dist_km"]))
+        nearby.sort(key=lambda e: (e.get("date") or "9999", e["dist_km"]))
         nearby = nearby[:max_results]
 
         if not nearby:
@@ -196,5 +216,7 @@ async def find_events_near_city(
 
         lines = [f"Upcoming MX events within {radius_km} km of {city}:"]
         for ev in nearby:
-            lines.append(f"  • {ev['date']} — {ev['name']} at @{ev['slug']} (~{ev['dist_km']} km)")
+            lines.append(
+                f"  • {ev['date']} — {ev['name']} (~{ev['dist_km']} km) | URL: {ev['url']}"
+            )
         return "\n".join(lines)
