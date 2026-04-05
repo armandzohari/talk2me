@@ -4,6 +4,11 @@ import VoiceAgent from "./components/VoiceAgent";
 
 const AGENT_NAME = "Armando";
 const PHOTO_URL = "/bugs bunny chews.gif";
+const GIFS = ["/bugs bunny chews.gif", "/bugs bunny drinks.gif"];
+
+// Preload both GIFs immediately so they're in the browser cache
+// before the call screen ever tries to display them.
+GIFS.forEach((src) => { const img = new Image(); img.src = src; });
 
 export default function App() {
   const [session, setSession] = useState(null);
