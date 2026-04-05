@@ -6,6 +6,8 @@ import {
 } from "@livekit/components-react";
 import { RoomEvent } from "livekit-client";
 
+const GIFS = ["/bugs bunny chews.gif", "/bugs bunny drinks.gif"];
+
 export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
@@ -15,6 +17,7 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
   const [transcript, setTranscript] = useState([]);
   const [copied, setCopied] = useState(false);
   const transcriptEndRef = useRef(null);
+  const [gifIndex, setGifIndex] = useState(() => Math.round(Math.random()));
 
   const agentParticipant = remoteParticipants.find(
     (p) => p.identity === "talk2me-agent"
@@ -44,6 +47,15 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
     room.on(RoomEvent.DataReceived, handler);
     return () => room.off(RoomEvent.DataReceived, handler);
   }, [room]);
+
+  // Swap GIF each time Armando finishes a phrase
+  useEffect(() => {
+    if (transcript.length === 0) return;
+    const last = transcript[transcript.length - 1];
+    if (last.speaker === "agent") {
+      setGifIndex(i => (i + 1) % GIFS.length);
+    }
+  }, [transcript]);
 
   // Auto-scroll transcript to bottom on new messages
   useEffect(() => {
@@ -93,7 +105,7 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
 
         <div className={`avatar-ring ${agentSpeaking ? "avatar-ring--speaking" : ""}`}>
           <img
-            src={photoUrl}
+            src={GIFS[gifIndex]}
             alt={agentName}
             className="avatar-photo"
             onError={(e) => {
