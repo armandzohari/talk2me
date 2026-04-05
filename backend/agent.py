@@ -26,7 +26,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 
 from pipecat.services.deepgram import DeepgramSTTService, LiveOptions
-from pipecat.services.anthropic import AnthropicLLMService
+from pipecat.services.groq import GroqLLMService
 from pipecat.services.cartesia import CartesiaTTSService
 
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
@@ -342,10 +342,10 @@ async def run_agent(room_name: str, visitor_meta: dict | None = None):
         ),
     )
 
-    # ── LLM: Claude ───────────────────────────────────────────────────────
-    llm = AnthropicLLMService(
-        api_key=config.ANTHROPIC_API_KEY,
-        model="claude-haiku-4-5-20251001",
+    # ── LLM: Groq + Llama (fast, free tier) ──────────────────────────────
+    llm = GroqLLMService(
+        api_key=config.GROQ_API_KEY,
+        model="llama-3.1-8b-instant",
     )
 
     # Conversation context — system prompt + greeting trigger
