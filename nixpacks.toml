@@ -1,5 +1,4 @@
 [phases.install]
 cmds = [
-  "pip install -r requirements.txt 2>/dev/null || pip install -r backend/requirements.txt",
-  "python -m playwright install chromium --with-deps"
+  "pip install -r requirements.txt 2>/dev/null || pip install -r backend/requirements.txt"
 ]
