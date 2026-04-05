@@ -8,7 +8,7 @@ import { RoomEvent } from "livekit-client";
 
 const GIFS = ["/bugs bunny chews.gif", "/bugs bunny drinks.gif"];
 
-export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
+export default function VoiceAgent({ agentName, onEnd }) {
   const room = useRoomContext();
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants();
@@ -34,8 +34,6 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
   useEffect(() => {
     if (!room) return;
     const handler = (payload, participant, kind, topic) => {
-      // Accept "transcript" topic, or no topic at all (older LiveKit SDK versions
-      // may not forward the topic parameter to the client).
       if (topic && topic !== "transcript") return;
       try {
         const msg = JSON.parse(new TextDecoder().decode(payload));
@@ -103,84 +101,79 @@ export default function VoiceAgent({ agentName, photoUrl, onEnd }) {
               ) : null
           )}
 
-        <div className={`avatar-ring ${agentSpeaking ? "avatar-ring--speaking" : ""}`}>
-          <img
-            src={GIFS[gifIndex]}
-            alt={agentName}
-            className="avatar-photo"
-            onError={(e) => {
-              e.target.style.display = "none";
-              e.target.nextSibling.style.display = "flex";
-            }}
-          />
-          <div className="avatar-fallback" style={{ display: "none" }}>{agentName[0]}</div>
-        </div>
+        {/* Full-screen GIF background — swaps on each Armando phrase */}
+        <img
+          key={gifIndex}
+          src={GIFS[gifIndex]}
+          alt={agentName}
+          className="bg-gif"
+        />
 
-        <h2 className="call-name">{agentName}</h2>
-        <p className="call-status">{statusText}</p>
+        {/* Bottom overlay */}
+        <div className="bottom">
+          <h2 className="call-name">{agentName}</h2>
+          <p className="call-status">{statusText}</p>
 
-        {/* Sound wave bars — animate when agent is speaking */}
-        <div className={`wave ${agentSpeaking ? "wave--active" : ""}`}>
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="wave-bar" style={{ animationDelay: `${i * 0.1}s` }} />
-          ))}
-        </div>
+          {/* Sound wave bars */}
+          <div className={`wave ${agentSpeaking ? "wave--active" : ""}`}>
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="wave-bar" style={{ animationDelay: `${i * 0.1}s` }} />
+            ))}
+          </div>
 
-        <div className="controls">
-          <button
-            className={`ctrl-btn ${muted ? "ctrl-btn--muted" : ""}`}
-            onClick={toggleMute}
-            title={muted ? "Unmute" : "Mute"}
-          >
-            {muted ? "🔇" : "🎙️"}
-          </button>
-          <button className="ctrl-btn ctrl-btn--end" onClick={handleEnd}>
-            End
-          </button>
-        </div>
-
-        {/* ── Transcript panel ───────────────────────────────────────── */}
-        <div className="transcript-wrap">
-          <div className="transcript-header">
-            <span className="transcript-title">Transcript</span>
+          <div className="controls">
             <button
-              className={`copy-btn ${copied ? "copy-btn--done" : ""}`}
-              onClick={copyTranscript}
-              title="Copy transcript"
-              disabled={transcript.length === 0}
+              className={`ctrl-btn ${muted ? "ctrl-btn--muted" : ""}`}
+              onClick={toggleMute}
+              title={muted ? "Unmute" : "Mute"}
             >
-              {copied ? (
-                /* checkmark */
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                /* copy icon */
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-              )}
+              {muted ? "🔇" : "🎙️"}
+            </button>
+            <button className="ctrl-btn ctrl-btn--end" onClick={handleEnd}>
+              End
             </button>
           </div>
 
-          <div className="transcript-body">
-            {transcript.length === 0 ? (
-              <p className="transcript-empty">Conversation transcript will appear here…</p>
-            ) : (
-              transcript.map(msg => (
-                <div
-                  key={msg.id}
-                  className={`transcript-msg ${msg.speaker === "agent" ? "transcript-msg--agent" : "transcript-msg--visitor"}`}
-                >
-                  <span className="transcript-speaker">
-                    {msg.speaker === "agent" ? agentName : "You"}
-                  </span>
-                  <span className="transcript-text">{msg.text}</span>
-                </div>
-              ))
-            )}
-            <div ref={transcriptEndRef} />
+          {/* Transcript panel */}
+          <div className="transcript-wrap">
+            <div className="transcript-header">
+              <span className="transcript-title">Transcript</span>
+              <button
+                className={`copy-btn ${copied ? "copy-btn--done" : ""}`}
+                onClick={copyTranscript}
+                title="Copy transcript"
+                disabled={transcript.length === 0}
+              >
+                {copied ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <div className="transcript-body">
+              {transcript.length === 0 ? (
+                <p className="transcript-empty">Conversation transcript will appear here…</p>
+              ) : (
+                transcript.map(msg => (
+                  <div
+                    key={msg.id}
+                    className={`transcript-msg ${msg.speaker === "agent" ? "transcript-msg--agent" : "transcript-msg--visitor"}`}
+                  >
+                    <span className="transcript-speaker">
+                      {msg.speaker === "agent" ? agentName : "You"}
+                    </span>
+                    <span className="transcript-text">{msg.text}</span>
+                  </div>
+                ))
+              )}
+              <div ref={transcriptEndRef} />
+            </div>
           </div>
         </div>
       </div>
@@ -194,62 +187,51 @@ const css = `
   body { background: #000; }
 
   .call-page {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
-    gap: 1rem;
+    justify-content: flex-end;
     min-height: 100vh;
-    padding: 3rem 1rem 3rem;
-    background: #000;
     color: #fff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow: hidden;
   }
 
-  .avatar-ring {
-    width: 160px;
-    height: 160px;
-    border-radius: 50%;
-    border: 3px solid rgba(255,255,255,0.15);
-    padding: 4px;
-    transition: border-color 0.3s, box-shadow 0.3s;
-  }
-
-  .avatar-ring--speaking {
-    border-color: rgba(255,255,255,0.8);
-    box-shadow: 0 0 0 6px rgba(255,255,255,0.08), 0 0 40px rgba(255,255,255,0.2);
-  }
-
-  .avatar-photo {
+  /* Full-screen GIF — same treatment as landing page */
+  .bg-gif {
+    position: fixed;
+    inset: 0;
     width: 100%;
     height: 100%;
-    border-radius: 50%;
     object-fit: cover;
-    object-position: top;
-    display: block;
+    object-position: top center;
+    mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+    z-index: 0;
   }
 
-  .avatar-fallback {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  /* Bottom overlay sits above the GIF */
+  .bottom {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    font-size: 3.5rem;
-    font-weight: 700;
-    color: #fff;
+    gap: 0.75rem;
+    padding: 0 1rem 8vh;
+    width: 100%;
   }
 
   .call-name {
-    font-size: 1.75rem;
+    font-size: clamp(2rem, 6vw, 3.5rem);
     font-weight: 700;
-    letter-spacing: -0.01em;
-    margin-top: 0.5rem;
+    letter-spacing: -0.02em;
+    text-shadow: 0 2px 40px rgba(0,0,0,0.8);
   }
 
   .call-status {
-    color: rgba(255,255,255,0.5);
+    color: rgba(255,255,255,0.6);
     font-size: 0.95rem;
     min-height: 1.4rem;
   }
@@ -260,7 +242,6 @@ const css = `
     align-items: center;
     gap: 4px;
     height: 32px;
-    margin: 0.5rem 0;
   }
 
   .wave-bar {
@@ -285,7 +266,7 @@ const css = `
   .controls {
     display: flex;
     gap: 1rem;
-    margin-top: 1.5rem;
+    margin-top: 0.5rem;
   }
 
   .ctrl-btn {
@@ -293,7 +274,7 @@ const css = `
     height: 64px;
     border-radius: 50%;
     border: 1.5px solid rgba(255,255,255,0.2);
-    background: rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.1);
     color: #fff;
     font-size: 1.4rem;
     cursor: pointer;
@@ -305,7 +286,7 @@ const css = `
   }
 
   .ctrl-btn:hover {
-    background: rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.2);
     transform: scale(1.05);
   }
 
@@ -326,14 +307,14 @@ const css = `
     background: rgba(248,113,113,0.35);
   }
 
-  /* ── Transcript panel ─────────────────────────────────────── */
+  /* Transcript panel */
   .transcript-wrap {
     width: 100%;
     max-width: 560px;
-    margin-top: 2rem;
+    margin-top: 0.5rem;
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 16px;
-    background: rgba(255,255,255,0.04);
+    background: rgba(0,0,0,0.45);
     backdrop-filter: blur(12px);
     overflow: hidden;
   }
@@ -373,19 +354,12 @@ const css = `
     color: #fff;
   }
 
-  .copy-btn:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-
-  .copy-btn--done {
-    color: #4ade80;
-    border-color: rgba(74,222,128,0.3);
-  }
+  .copy-btn:disabled { opacity: 0.3; cursor: default; }
+  .copy-btn--done { color: #4ade80; border-color: rgba(74,222,128,0.3); }
 
   .transcript-body {
     padding: 0.75rem 1rem 1rem;
-    max-height: 280px;
+    max-height: 220px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -394,14 +368,9 @@ const css = `
     scrollbar-color: rgba(255,255,255,0.15) transparent;
   }
 
-  .transcript-body::-webkit-scrollbar {
-    width: 4px;
-  }
+  .transcript-body::-webkit-scrollbar { width: 4px; }
   .transcript-body::-webkit-scrollbar-track { background: transparent; }
-  .transcript-body::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,0.15);
-    border-radius: 2px;
-  }
+  .transcript-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
 
   .transcript-empty {
     color: rgba(255,255,255,0.25);
@@ -410,11 +379,7 @@ const css = `
     padding: 1.5rem 0;
   }
 
-  .transcript-msg {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
+  .transcript-msg { display: flex; flex-direction: column; gap: 0.2rem; }
 
   .transcript-speaker {
     font-size: 0.7rem;
@@ -423,13 +388,8 @@ const css = `
     text-transform: uppercase;
   }
 
-  .transcript-msg--agent .transcript-speaker {
-    color: rgba(139,92,246,0.9);
-  }
-
-  .transcript-msg--visitor .transcript-speaker {
-    color: rgba(255,255,255,0.45);
-  }
+  .transcript-msg--agent .transcript-speaker { color: rgba(139,92,246,0.9); }
+  .transcript-msg--visitor .transcript-speaker { color: rgba(255,255,255,0.45); }
 
   .transcript-text {
     font-size: 0.9rem;
@@ -437,7 +397,5 @@ const css = `
     color: rgba(255,255,255,0.85);
   }
 
-  .transcript-msg--visitor .transcript-text {
-    color: rgba(255,255,255,0.65);
-  }
+  .transcript-msg--visitor .transcript-text { color: rgba(255,255,255,0.65); }
 `;
