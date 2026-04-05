@@ -18,6 +18,7 @@ export default function VoiceAgent({ agentName, onEnd }) {
   const [copied, setCopied] = useState(false);
   const transcriptEndRef = useRef(null);
   const [gifIndex, setGifIndex] = useState(() => Math.round(Math.random()));
+  const [gifReady, setGifReady] = useState(false);
 
   const agentParticipant = remoteParticipants.find(
     (p) => p.identity === "talk2me-agent"
@@ -51,6 +52,7 @@ export default function VoiceAgent({ agentName, onEnd }) {
     if (transcript.length === 0) return;
     const last = transcript[transcript.length - 1];
     if (last.speaker === "agent") {
+      setGifReady(false);
       setGifIndex(i => (i + 1) % GIFS.length);
     }
   }, [transcript]);
@@ -107,6 +109,12 @@ export default function VoiceAgent({ agentName, onEnd }) {
           src={GIFS[gifIndex]}
           alt={agentName}
           className="bg-gif"
+          style={{ opacity: gifReady ? 1 : 0 }}
+          onLoad={() => setGifReady(true)}
+          onError={() => {
+            // If the new gif fails, fall back to the other one
+            setGifIndex(i => (i + 1) % GIFS.length);
+          }}
         />
 
         {/* Bottom overlay */}
@@ -209,6 +217,7 @@ const css = `
     mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
     z-index: 0;
+    transition: opacity 0.3s ease;
   }
 
   /* Bottom overlay sits above the GIF */

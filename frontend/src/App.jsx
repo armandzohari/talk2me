@@ -6,9 +6,9 @@ const AGENT_NAME = "Armando";
 const PHOTO_URL = "/bugs bunny chews.gif";
 const GIFS = ["/bugs bunny chews.gif", "/bugs bunny drinks.gif"];
 
-// Preload both GIFs immediately so they're in the browser cache
-// before the call screen ever tries to display them.
-GIFS.forEach((src) => { const img = new Image(); img.src = src; });
+// Preload both GIFs at module load and keep references so they
+// are not garbage-collected before the browser finishes fetching.
+const _preloaded = GIFS.map((src) => { const img = new Image(); img.src = src; return img; });
 
 export default function App() {
   const [session, setSession] = useState(null);
