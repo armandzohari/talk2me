@@ -312,7 +312,7 @@ async def run_agent(room_name: str, visitor_meta: dict | None = None):
                                           # is consumed by the VAD and never reaches DeepgramSTTService
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    stop_secs=0.5,
+                    stop_secs=0.3,
                     min_volume=0.2,
                     confidence=0.5,
                 )
@@ -345,7 +345,7 @@ async def run_agent(room_name: str, visitor_meta: dict | None = None):
     # ── LLM: Claude ───────────────────────────────────────────────────────
     llm = AnthropicLLMService(
         api_key=config.ANTHROPIC_API_KEY,
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",
     )
 
     # Conversation context — system prompt + greeting trigger
