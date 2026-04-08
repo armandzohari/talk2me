@@ -47,15 +47,7 @@ export default function VoiceAgent({ agentName, onEnd }) {
     return () => room.off(RoomEvent.DataReceived, handler);
   }, [room]);
 
-  // Swap GIF each time Armando finishes a phrase
-  useEffect(() => {
-    if (transcript.length === 0) return;
-    const last = transcript[transcript.length - 1];
-    if (last.speaker === "agent") {
-      setGifReady(false);
-      setGifIndex(i => (i + 1) % GIFS.length);
-    }
-  }, [transcript]);
+  // GIF is chosen randomly on mount and stays fixed for the whole conversation.
 
   // Auto-scroll transcript to bottom on new messages
   useEffect(() => {

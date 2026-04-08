@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { LiveKitRoom } from "@livekit/components-react";
 import VoiceAgent from "./components/VoiceAgent";
 
@@ -14,6 +14,16 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const visitorIpRef = useRef(null);
+
+  // Capture real browser IP on page load via a lightweight GET — before any
+  // POST proxying can obscure it — and store it for the /join call.
+  useEffect(() => {
+    fetch("/ip")
+      .then(r => r.json())
+      .then(data => { visitorIpRef.current = data.ip; })
+      .catch(() => {});
+  }, []);
 
   const handleStart = useCallback(async () => {
     setLoading(true);
@@ -22,7 +32,7 @@ export default function App() {
       const res = await fetch("/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_name: "visitor" }),
+        body: JSON.stringify({ user_name: "visitor", client_ip: visitorIpRef.current }),
       });
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data = await res.json();

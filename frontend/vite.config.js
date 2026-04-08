@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       "/join": "http://localhost:8000",
       "/health": "http://localhost:8000",
+      "/ip": "http://localhost:8000",
     },
   },
 });

@@ -23,6 +23,7 @@ app.add_middleware(
 
 class JoinRequest(BaseModel):
     user_name: str = "visitor"
+    client_ip: str | None = None   # real browser IP pre-captured via GET /ip
 
 
 class JoinResponse(BaseModel):
@@ -106,7 +107,9 @@ async def join(req: JoinRequest, request: Request):
     room_name = f"talk2me-{uuid.uuid4().hex[:8]}"
 
     # ── Visitor metadata ───────────────────────────────────────────────────
-    ip = _get_client_ip(request)
+    # Prefer the IP that the frontend captured on page load via GET /ip
+    # (avoids Railway's load-balancer masking the real browser IP on POSTs).
+    ip = req.client_ip or _get_client_ip(request)
     ua_string = request.headers.get("user-agent", "")
     geo = await _fetch_geolocation(ip)
     ua_info = _parse_user_agent(ua_string)
@@ -155,3 +158,11 @@ async def start_agent(room_name: str, visitor_meta: dict | None = None):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ip")
+async def get_ip(request: Request):
+    """Returns the caller's detected IP. Called by the frontend on page load
+    so the real browser IP is captured before the POST /join goes through
+    Railway's load-balancer."""
+    return {"ip": _get_client_ip(request)}
