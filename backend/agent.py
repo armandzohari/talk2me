@@ -324,10 +324,10 @@ async def run_agent(room_name: str, visitor_meta: dict | None = None):
                                           # is consumed by the VAD and never reaches DeepgramSTTService
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    start_secs=0.3,    # must hear 300 ms of speech before triggering (filters breath pops)
-                    stop_secs=0.8,     # wait 800 ms of silence before ending a turn (was 0.3)
-                    min_volume=0.55,   # ignore quiet sounds like breathing (was 0.2)
-                    confidence=0.7,    # require 70 % confidence it's real speech (was 0.5)
+                    start_secs=0.5,    # 500 ms of continuous speech required before triggering
+                    stop_secs=0.8,     # 800 ms of silence before ending a turn
+                    min_volume=0.75,   # high threshold — filters iPhone background noise
+                    confidence=0.85,   # 85 % confidence required — ignores ambient sounds
                 )
             ),
         ),

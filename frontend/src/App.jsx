@@ -61,7 +61,12 @@ export default function App() {
         token={session.token}
         serverUrl={session.url}
         connect={true}
-        audio={true}
+        audio={{
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: false,  // disable AGC — on iPhone it boosts gain during silence,
+                                   // amplifying background noise into the VAD's trigger range
+        }}
         video={false}
         onDisconnected={handleDisconnect}
       >
