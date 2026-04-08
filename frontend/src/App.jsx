@@ -16,13 +16,20 @@ export default function App() {
   const [error, setError] = useState(null);
   const visitorIpRef = useRef(null);
 
-  // Capture real browser IP on page load via a lightweight GET — before any
-  // POST proxying can obscure it — and store it for the /join call.
+  // Ask an external service what the browser's public IP is.
+  // This bypasses Railway's reverse proxy entirely — the request goes
+  // directly from the browser to ipify, so the result is always accurate.
   useEffect(() => {
-    fetch("/ip")
+    fetch("https://api.ipify.org?format=json")
       .then(r => r.json())
       .then(data => { visitorIpRef.current = data.ip; })
-      .catch(() => {});
+      .catch(() => {
+        // Fallback: ask our own backend (works if Railway forwards X-Forwarded-For)
+        fetch("/ip")
+          .then(r => r.json())
+          .then(data => { visitorIpRef.current = data.ip; })
+          .catch(() => {});
+      });
   }, []);
 
   const handleStart = useCallback(async () => {
