@@ -48,6 +48,7 @@ class ConversationLogger:
     """
 
     def __init__(self, room_name: str, visitor_meta: dict):
+        self._flushed = False
         self.room_name = room_name
         self.visitor_meta = visitor_meta
         self.started_at = datetime.now(timezone.utc)
@@ -62,6 +63,9 @@ class ConversationLogger:
 
     def flush(self):
         """Write the log file. Safe to call more than once (idempotent)."""
+        if self._flushed:
+            return
+        self._flushed = True
         try:
             ended_at  = datetime.now(timezone.utc)
             duration  = int((ended_at - self.started_at).total_seconds())
