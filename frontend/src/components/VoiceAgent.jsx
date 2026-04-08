@@ -5,6 +5,7 @@ import {
   useRoomContext,
 } from "@livekit/components-react";
 import { RoomEvent, Track } from "livekit-client";
+import { KrispNoiseFilter, isKrispNoiseFilterSupported } from "@livekit/krisp-noise-filter";
 
 const GIFS = ["/bugs bunny chews.gif", "/bugs bunny drinks.gif"];
 
@@ -30,6 +31,35 @@ export default function VoiceAgent({ agentName, onEnd }) {
     agentParticipant.on("isSpeakingChanged", handler);
     return () => agentParticipant.off("isSpeakingChanged", handler);
   }, [agentParticipant]);
+
+  // Apply Krisp AI noise cancellation to the local microphone track.
+  // Krisp runs a WebAssembly ML model client-side, removing background noise
+  // before audio ever reaches LiveKit. Falls back gracefully if unsupported.
+  useEffect(() => {
+    if (!localParticipant || !isKrispNoiseFilterSupported()) return;
+
+    const applyKrisp = async (pub) => {
+      if (pub.source !== Track.Source.Microphone || !pub.track) return;
+      try {
+        await pub.track.setProcessor(KrispNoiseFilter());
+      } catch (e) {
+        console.warn("Krisp noise filter failed to start:", e);
+      }
+    };
+
+    // Apply to an already-published mic track (most cases)
+    const existing = localParticipant.getTrackPublication(Track.Source.Microphone);
+    if (existing) applyKrisp(existing);
+
+    // Also handle the case where the mic track is published after mount
+    localParticipant.on("localTrackPublished", applyKrisp);
+
+    return () => {
+      localParticipant.off("localTrackPublished", applyKrisp);
+      const pub = localParticipant.getTrackPublication(Track.Source.Microphone);
+      pub?.track?.stopProcessor();
+    };
+  }, [localParticipant]);
 
   // Listen for transcript data packets from the backend
   useEffect(() => {
