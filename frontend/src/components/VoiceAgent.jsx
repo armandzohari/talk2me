@@ -4,7 +4,7 @@ import {
   useRemoteParticipants,
   useRoomContext,
 } from "@livekit/components-react";
-import { RoomEvent } from "livekit-client";
+import { RoomEvent, Track } from "livekit-client";
 
 const GIFS = ["/bugs bunny chews.gif", "/bugs bunny drinks.gif"];
 
@@ -65,7 +65,19 @@ export default function VoiceAgent({ agentName, onEnd }) {
   };
 
   const toggleMute = async () => {
-    await localParticipant.setMicrophoneEnabled(muted);
+    // Mute/unmute the track in-place rather than unpublishing it.
+    // setMicrophoneEnabled(false) fully removes the track from LiveKit,
+    // which the backend pipeline sees as a participant event and interrupts
+    // the agent's speech. track.mute() keeps the track published (sending
+    // silence) so the backend notices nothing.
+    const pub = localParticipant.getTrackPublication(Track.Source.Microphone);
+    if (pub?.track) {
+      if (muted) {
+        await pub.track.unmute();
+      } else {
+        await pub.track.mute();
+      }
+    }
     setMuted(!muted);
   };
 
