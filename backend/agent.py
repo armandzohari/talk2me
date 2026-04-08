@@ -161,7 +161,7 @@ class ConversationLogger:
             # Append to GitHub file (best-effort)
             github_token = os.environ.get("GITHUB_TOKEN", "")
             if github_token:
-                asyncio.get_event_loop().create_task(
+                asyncio.get_running_loop().create_task(
                     self._append_to_github(github_token, content)
                 )
         except Exception as e:
@@ -255,7 +255,7 @@ class _TranscriptList(list):
             self._conv_logger.add_turn(speaker, text)
             logger.debug(f"Transcript: queuing publish for {speaker}: {text[:60]}")
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 loop.create_task(self._publish({"speaker": speaker, "text": text}))
             except Exception as e:
                 logger.error(f"Transcript: failed to schedule publish task: {e}")
