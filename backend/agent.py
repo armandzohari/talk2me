@@ -15,7 +15,10 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from loguru import logger
+
+BERLIN_TZ = ZoneInfo("Europe/Berlin")
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -108,13 +111,17 @@ class ConversationLogger:
 
             sep = "=" * 72
 
+            started_berlin = self.started_at.astimezone(BERLIN_TZ)
+            ended_berlin   = ended_at.astimezone(BERLIN_TZ)
+            tz_abbr        = ended_berlin.strftime("%Z")   # CET or CEST
+
             lines = [
                 sep,
                 "Talk2Me — Conversation Log",
                 sep,
                 f"Session   : {self.room_name}",
-                f"Started   : {self.started_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-                f"Ended     : {ended_at.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"Started   : {started_berlin.strftime('%Y-%m-%d %H:%M:%S')} {tz_abbr}",
+                f"Ended     : {ended_berlin.strftime('%Y-%m-%d %H:%M:%S')} {tz_abbr}",
                 f"Duration  : {mins}m {sec:02d}s",
                 "",
                 "VISITOR INFORMATION",
@@ -133,7 +140,8 @@ class ConversationLogger:
 
             if self.turns:
                 for turn in self.turns:
-                    ts      = turn["ts"][11:19]   # HH:MM:SS from ISO
+                    ts_utc  = datetime.fromisoformat(turn["ts"])
+                    ts      = ts_utc.astimezone(BERLIN_TZ).strftime("%H:%M:%S")
                     speaker = config.AGENT_NAME if turn["speaker"] == "agent" else "Visitor"
                     lines.append(f"[{ts}] {speaker}: {turn['text']}")
             else:

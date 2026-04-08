@@ -32,8 +32,19 @@ class JoinResponse(BaseModel):
 
 
 def _get_client_ip(request: Request) -> str:
-    """Return the real visitor IP, respecting common proxy headers."""
-    for header in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip"):
+    """Return the real visitor IP, respecting common proxy headers.
+
+    Priority order:
+    - cf-connecting-ip   → set by Cloudflare, always the real browser IP
+    - true-client-ip     → set by Cloudflare Enterprise / Akamai
+    - x-real-ip          → set by nginx proxies
+    - x-forwarded-for    → standard proxy chain; first entry is original client
+    - x-client-ip        → fallback used by some CDNs
+    Falls back to the direct TCP peer address (Railway load-balancer) if none
+    of the above are present.
+    """
+    for header in ("cf-connecting-ip", "true-client-ip", "x-real-ip",
+                   "x-forwarded-for", "x-client-ip"):
         value = request.headers.get(header)
         if value:
             return value.split(",")[0].strip()
